@@ -6,4 +6,5 @@ fn main() {
 
     println!("cargo:rustc-link-search=native={}", dst.display());
     println!("cargo:rustc-link-lib=dylib=musix");
+    println!("cargo:rustc-link-lib=dylib=asound");
 }

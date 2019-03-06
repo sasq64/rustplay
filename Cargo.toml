@@ -6,7 +6,9 @@ edition = "2018"
 build="build.rs"
 
 [dependencies]
-coreaudio-rs = "0.9.1"
+#coreaudio-rs = "0.9.1"
+alsa-sys = "0.1.2"
+minifb = "0.11.2"
 
 [build-dependencies]
 cmake = "0.1.31"
