@@ -1,9 +1,3 @@
-#![allow(non_upper_case_globals)]
-#![allow(non_camel_case_types)]
-#![allow(non_snake_case)]
-
-include!("asoundlib.rs");
-
 use std::ffi::CStr;
 
 use std::collections::VecDeque;
@@ -14,8 +8,16 @@ use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
 use std::{thread, time};
 
-#[link(name = "asound")]
+extern crate coreaudio;
+
+use coreaudio::audio_unit::{AudioUnit, IOType, SampleFormat};
+use coreaudio::audio_unit::render_callback::{self, data};
+
 #[link(name = "musix")]
+
+extern "C" {
+    pub fn free(__ptr: *mut ::std::os::raw::c_void);
+}
 
 extern "C" {
     fn musix_create(dataDir: *const c_char) -> i32;
@@ -74,7 +76,7 @@ impl ChipPlayer {
 
 unsafe impl Send for ChipPlayer {}
 
-pub fn playSong(song_file: &str) -> ChipPlayer {
+pub fn play_song(song_file: &str) -> ChipPlayer {
     let music_file = CString::new(song_file).unwrap();
     //let data_dir = CString::new("data").unwrap();
     unsafe {
@@ -90,61 +92,34 @@ pub trait AudioPlayer {
     fn play(&mut self, callback: fn(&mut [i16]));
 }
 
-pub struct LinuxPlayer {
-    playback_handle: *mut snd_pcm_t,
+pub struct MacPlayer {
     hz: u32,
 }
 
-unsafe impl Send for LinuxPlayer {}
-
-impl LinuxPlayer {
+impl MacPlayer {
     fn create(&mut self) {
-        let default = CString::new("default").unwrap();
-        unsafe {
-            let err = snd_pcm_open(
-                &mut self.playback_handle,
-                default.as_ptr(),
-                _snd_pcm_stream_SND_PCM_STREAM_PLAYBACK,
-                0,
-            );
-            snd_pcm_set_params(
-                self.playback_handle,
-                _snd_pcm_format_SND_PCM_FORMAT_S16,
-                _snd_pcm_access_SND_PCM_ACCESS_RW_INTERLEAVED,
-                2,
-                self.hz,
-                1,
-                30000,
-            );
-        }
+        let mut audio_unit = AudioUnit::new(IOType::DefaultOutput);
     }
 }
 
-impl AudioPlayer for LinuxPlayer {
-    fn new(hz: u32) -> LinuxPlayer {
-        let mut player = LinuxPlayer {
-            playback_handle: std::ptr::null_mut(),
-            hz,
-        };
+impl AudioPlayer for MacPlayer {
+    fn new(hz: u32) -> MacPlayer {
+        let mut player = MacPlayer { hz };
         player.create();
         player
     }
 
     fn write(&mut self, samples: &[i16]) {
-        unsafe {
-            snd_pcm_writei(
-                self.playback_handle,
-                samples.as_ptr() as *const c_void,
-                (samples.len() / 2) as u64,
-            );
-        }
     }
 
     fn play(&mut self, callback: fn(&mut [i16])) {}
 }
 
-pub fn createAudioPlayer() -> LinuxPlayer {
-    LinuxPlayer::new(44100)
+
+
+
+pub fn create_audio_player() -> MacPlayer {
+    MacPlayer::new(44100)
 }
 
 fn main() {
@@ -155,8 +130,8 @@ fn main() {
         musix_create(data_dir.as_ptr());
     }
 
-    let mut audioPlayer = createAudioPlayer();
-    let mut player = playSong("music/Starbuck - Tennis.mod");
+    let mut audioPlayer = create_audio_player();
+    let mut player = play_song("music/Starbuck - Tennis.mod");
 
     println!("TITLE:{}", player.get_meta("game"));
     //    player.seek(1, 0);
