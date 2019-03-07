@@ -119,6 +119,7 @@ enum PlayerInfo {
 }
 
 fn main() {
+
     let (cmd_sender, cmd_receiver) = channel::<Command>();
     let (info_sender, info_receiver) = channel::<PlayerInfo>();
     thread::spawn(move || {
@@ -155,7 +156,7 @@ fn main() {
    //std::thread::sleep(time::Duration::from_millis(1000));
     cmd_sender
         .send(Command::Play(
-            "musicplayer/music/Mega Man 2.nsfe".to_string(),
+            "musicplayer/music/Jugi - onward (party version).xm".to_string(),
         ))
         .expect("Could not send");
 
