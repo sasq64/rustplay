@@ -19,11 +19,24 @@ use std::{thread, time};
 
 mod audio_player;
 
+#[cfg(target_os = "linux")]
 mod linux_player;
+#[cfg(target_os = "macos")]
+mod mac_player;
 
 use crate::audio_player::AudioPlayer;
 
-#[link(name = "musix")]
+#[cfg(target_os = "macos")]
+pub fn create_audio_player() -> impl AudioPlayer {
+    mac_player::MacPlayer::new(44100)
+}
+
+#[cfg(target_os = "linux")]
+pub fn create_audio_player() -> impl AudioPlayer {
+    linux_player::LinuxPlayer::new(44100)
+}
+
+// #[link(name = "musix")]
 
 extern "C" {
     pub fn free(__ptr: *mut ::std::os::raw::c_void);
@@ -96,39 +109,6 @@ pub fn play_song(song_file: &str) -> ChipPlayer {
     }
 }
 
-// pub trait AudioPlayer {
-//     fn new(hz: u32) -> Self;
-//     fn write(&mut self, samples: &[i16]);
-//     fn play(&mut self, callback: fn(&mut [i16]));
-// }
-
-// pub struct MacPlayer {
-//     hz: u32,
-// }
-
-// impl MacPlayer {
-//     fn create(&mut self) {
-//         let mut audio_unit = AudioUnit::new(IOType::DefaultOutput);
-//     }
-// }
-
-// impl AudioPlayer for MacPlayer {
-//     fn new(hz: u32) -> MacPlayer {
-//         let mut player = MacPlayer { hz };
-//         player.create();
-//         player
-//     }
-
-//     fn write(&mut self, samples: &[i16]) {
-//     }
-
-//     fn play(&mut self, callback: fn(&mut [i16])) {}
-// }
-
-pub fn create_audio_player() -> linux_player::LinuxPlayer {
-    linux_player::LinuxPlayer::new(44100)
-}
-
 enum Command {
     Play(String),
     SetSong(i32),
@@ -163,9 +143,7 @@ fn main() {
                             .send(PlayerInfo::Title(title))
                             .expect("Could not send");
                     }
-                    Command::SetSong(n) => {
-                        player.seek(n, 0);
-                    }
+                    Command::SetSong(n) => player.seek(n, 0),
                 }
             }
 
@@ -174,7 +152,7 @@ fn main() {
         }
     });
 
-    std::thread::sleep(time::Duration::from_millis(1000));
+   //std::thread::sleep(time::Duration::from_millis(1000));
     cmd_sender
         .send(Command::Play(
             "musicplayer/music/Mega Man 2.nsfe".to_string(),
@@ -186,28 +164,16 @@ fn main() {
     }
 
     std::thread::sleep(time::Duration::from_millis(1000));
-    cmd_sender
-        .send(Command::SetSong(20))
-        .expect("Could not send");
+    cmd_sender.send(Command::SetSong(19)).expect("Could not send");
 
-    let mut buffer: Vec<u32> = vec![0; WIDTH * HEIGHT];
-
-    let mut window = Window::new(
-        "Test - ESC to exit",
-        WIDTH,
-        HEIGHT,
+    let mut window = Window::new( "Audioplayer",
+        WIDTH, HEIGHT,
         WindowOptions::default(),
-    )
-    .unwrap_or_else(|e| {
+    ) .unwrap_or_else(|e| {
         panic!("{}", e);
     });
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        for i in buffer.iter_mut() {
-            *i = 0; // write something more funny here!
-        }
-
-        // We unwrap here as we want this code to exit if it fails. Real applications may want to handle this in a different way
-        window.update_with_buffer(&buffer).unwrap();
+        window.update();
     }
 }
