@@ -1,13 +1,9 @@
-use crate::audio_player::AudioPlayer;
-
 extern crate coreaudio;
 use coreaudio::audio_unit::render_callback::{self, data};
 use coreaudio::audio_unit::{AudioUnit, IOType, SampleFormat};
-use std::collections::VecDeque;
-
-use std::sync::{Mutex, Arc, Condvar, MutexGuard};
 
 use crate::fifo::Fifo;
+use crate::audio_player::AudioPlayer;
 
 pub struct MacPlayer {
     fifo: Fifo<i16>,
@@ -17,8 +13,9 @@ pub struct MacPlayer {
 
 impl AudioPlayer for MacPlayer {
     fn new(hz: u32) -> MacPlayer {
-        let mut audio_unit = AudioUnit::new(IOType::DefaultOutput).unwrap();
+        let mut audio_unit : AudioUnit = AudioUnit::new(IOType::DefaultOutput).unwrap();
         audio_unit.set_sample_rate(hz as f64).expect("");
+
         let stream_format = audio_unit.output_stream_format().unwrap();
         println!("{:#?}", &stream_format);  
 
@@ -29,13 +26,12 @@ impl AudioPlayer for MacPlayer {
         let fifo_clone = audio_fifo.clone();
         audio_unit.set_render_callback(move |args| {
             let Args { num_frames, mut data, .. } = args;
-            println!("Need {} frames, have {} on fifo", num_frames, audio_fifo.len());
             for i in 0..num_frames {
                 for channel in data.channels_mut() {
                     if let Some(sample) = audio_fifo.pop_front() {
                         channel[i] = (sample as f32) / 32768.0;
                     } else {
-                        break;
+                        channel[i] = 0.0;
                     }
                 }
             }
