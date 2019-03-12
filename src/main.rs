@@ -14,8 +14,12 @@ mod audio_player;
 
 #[cfg(target_os = "linux")]
 mod linux_player;
+
 #[cfg(target_os = "macos")]
 mod mac_player;
+
+#[cfg(target_os = "windows")]
+mod win_player;
 
 use audio_player::AudioPlayer;
 
@@ -29,6 +33,10 @@ pub fn create_audio_player() -> impl AudioPlayer {
     linux_player::LinuxPlayer::new(44100)
 }
 
+#[cfg(target_os = "windows")]
+pub fn create_audio_player() -> impl AudioPlayer {
+    win_player::WinPlayer::new(44100)
+}
 enum Command {
     Play(String),
     SetSong(i32),
