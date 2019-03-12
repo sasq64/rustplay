@@ -36,6 +36,7 @@ enum Command {
 
 enum PlayerInfo {
     Title(String),
+    Composer(String),
 }
 
 struct MusicPlayer {
@@ -63,6 +64,10 @@ impl MusicPlayer {
                             let title = player.get_meta("title");
                             info_sender
                                 .send(PlayerInfo::Title(title))
+                                .expect("Could not send");
+                            let composer = player.get_meta("composer");
+                            info_sender
+                                .send(PlayerInfo::Composer(composer))
                                 .expect("Could not send");
                         }
                         Command::SetSong(n) => player.seek(n, 0),
@@ -98,8 +103,10 @@ impl MusicPlayer {
 
 fn main() {
 
+    let args: Vec<String> = std::env::args().collect();
+
     let mut music_player = MusicPlayer::create("musicplayer/data");
-    music_player.play("musicplayer/music/C64/Andropolis.sid");
+    music_player.play(&args[1]);
     music_player.set_song(0);
 
     let mut window = Window::new( "Audioplayer",
@@ -113,6 +120,9 @@ fn main() {
 
         if let Some(PlayerInfo::Title(title)) = music_player.get_info() {
             println!("TITLE {}", title);
+        }
+        if let Some(PlayerInfo::Composer(composer)) = music_player.get_info() {
+            println!("COMPOSER {}", composer);
         }
 
         window.update();
