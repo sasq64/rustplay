@@ -13,10 +13,12 @@ fn visit_dirs(dir: &Path, target : &mut Vec<PathBuf>) {
             } else {
                 println!("{}", path.to_str().unwrap());
                 let name : String = path.file_name().unwrap().to_str().unwrap().to_string();
-                if name.ends_with(".a") {
+                //if name.ends_with(".a") {
+                if name.ends_with(".lib") {
                     println!("cargo:rustc-link-search=native={}", dir.to_str().unwrap());
                     let len = name.len();
-                    println!("cargo:rustc-link-lib=static={}", name[3..len-2].to_string());
+                    //println!("cargo:rustc-link-lib=static={}", name[3..len-2].to_string());
+                    println!("cargo:rustc-link-lib=static={}", name[0..len-4].to_string());
                 } 
 
 
@@ -34,6 +36,6 @@ fn main() {
 
     //println!("cargo:rustc-link-search=native={}", dst.display());
     //println!("cargo:rustc-link-lib=dylib=musix");
-    println!("cargo:rustc-link-lib=dylib=c++");
+    //  println!("cargo:rustc-link-lib=dylib=c++");
     //    println!("cargo:rustc-link-lib=dylib=asound");
 }
