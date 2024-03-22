@@ -17,7 +17,7 @@ impl AudioPlayer for MacPlayer {
         audio_unit.set_sample_rate(hz as f64).expect("");
 
         let stream_format = audio_unit.output_stream_format().unwrap();
-        println!("{:#?}", &stream_format);  
+        //println!("{:#?}", &stream_format);
 
         assert!(SampleFormat::F32 == stream_format.sample_format);
 
