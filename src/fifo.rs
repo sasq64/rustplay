@@ -1,14 +1,15 @@
 use std::collections::VecDeque;
-use std::sync::{Mutex, Arc, Condvar};
+use std::sync::{Arc, Condvar, Mutex};
 
 #[derive(Clone)]
 pub struct Fifo<T> {
-    deque : Arc<Mutex<VecDeque<T>>>,
-    cv : Arc<Condvar>
+    deque: Arc<Mutex<VecDeque<T>>>,
+    cv: Arc<Condvar>,
 }
 
+#[allow(dead_code)]
 impl<T> Fifo<T> {
-    pub fn push_back(&mut self, v : T) {
+    pub fn push_back(&mut self, v: T) {
         loop {
             let mut guard = self.deque.lock().unwrap();
             if guard.len() > 64 * 1024 {
@@ -24,15 +25,15 @@ impl<T> Fifo<T> {
         }
     }
     pub fn pop_front(&mut self) -> Option<T> {
-       let result = self.deque.lock().unwrap().pop_front();
-       self.cv.notify_one();
-       result
+        let result = self.deque.lock().unwrap().pop_front();
+        self.cv.notify_one();
+        result
     }
 
     pub fn new() -> Fifo<T> {
         Fifo {
-            deque : Arc::new(Mutex::new(VecDeque::new())),
-            cv : Arc::new(Condvar::new())
+            deque: Arc::new(Mutex::new(VecDeque::new())),
+            cv: Arc::new(Condvar::new()),
         }
     }
 

@@ -12,10 +12,8 @@ pub struct LinuxPlayer {
 
 unsafe impl Send for LinuxPlayer {}
 
-
 impl LinuxPlayer {
     fn create(&mut self) -> Result<i32, i32> {
-
         let default = CString::new("default").unwrap();
         unsafe {
             let err = snd_pcm_open(
