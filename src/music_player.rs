@@ -1,7 +1,7 @@
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
 
-use musicplayer::musix;
+use musix;
 
 use crate::audio_player::AudioPlayer;
 use crate::mac_player;
@@ -65,7 +65,7 @@ impl MusicPlayer {
                 if let Ok(cmd) = cmd_receiver.try_recv() {
                     match cmd {
                         Command::Play(name) => {
-                            player = musix::play_song(&name);
+                            player = musix::load_song(&name).unwrap();
                         }
                         Command::SetSong(n) => {
                             songn = n;
@@ -91,19 +91,20 @@ impl MusicPlayer {
                     .expect("Could not send");
 
                 while let Some(what) = player.get_changed_meta() {
-                    let val = player.get_meta(what.as_str());
-                    let info = match what.as_str() {
-                        "composer" => PlayerInfo::Composer(val),
-                        "title" => PlayerInfo::Title(val),
-                        "game" => PlayerInfo::Game(val),
-                        "sub_title" => PlayerInfo::Subtitle(val),
-                        "length" => PlayerInfo::Length(val.parse::<i32>().unwrap()),
-                        "songs" => PlayerInfo::Songs(val.parse::<i32>().unwrap()),
-                        "song" => PlayerInfo::Song(val.parse::<i32>().unwrap()),
-                        "format" => PlayerInfo::Format(val),
-                        _ => PlayerInfo::Custom(what),
-                    };
-                    info_sender.send(info).expect("Could not send");
+                    if let Some(val) = player.get_meta_string(what.as_str()) {
+                        let info = match what.as_str() {
+                            "composer" => PlayerInfo::Composer(val),
+                            "title" => PlayerInfo::Title(val),
+                            "game" => PlayerInfo::Game(val),
+                            "sub_title" => PlayerInfo::Subtitle(val),
+                            "length" => PlayerInfo::Length(val.parse::<i32>().unwrap()),
+                            "songs" => PlayerInfo::Songs(val.parse::<i32>().unwrap()),
+                            "song" => PlayerInfo::Song(val.parse::<i32>().unwrap()),
+                            "format" => PlayerInfo::Format(val),
+                            _ => PlayerInfo::Custom(what),
+                        };
+                        info_sender.send(info).expect("Could not send");
+                    }
                 }
             }
         });
