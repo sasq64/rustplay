@@ -1,98 +1,143 @@
+use cpal::{traits::*, SupportedBufferSize};
+use musix::ChipPlayer;
+use ringbuf::{traits::*, StaticRb};
 use std::io::stdout;
+use std::{error::Error, path::Path, thread};
 
 use crossterm::{
     event::{self, Event, KeyCode},
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
+
 use ratatui::{prelude::*, widgets::*};
+type Cmd = Box<dyn FnOnce(&mut ChipPlayer) -> Option<ChipPlayer> + Send>;
+type Info = (String, String);
 
-mod music_player;
+fn run_player<P, C>(mut info_producer: P, mut cmd_consumer: C) -> Result<(), Box<dyn Error>>
+where
+    P: Producer<Item = Info> + Send + 'static,
+    C: Consumer<Item = Cmd> + Send + 'static,
+{
+    let device = cpal::default_host().default_output_device().unwrap();
+    let mut config = device.default_output_config()?;
+    let configs = device.supported_output_configs()?;
+    let mut buffer_size = 0;
+    for conf in configs {
+        if let SupportedBufferSize::Range { max: b, .. } = conf.buffer_size() {
+            if *b > buffer_size {
+                buffer_size = *b;
+            }
+        }
+        if let Some(conf2) = conf.try_with_sample_rate(cpal::SampleRate(44100)) {
+            config = conf2;
+            break;
+        }
+    }
 
-mod audio_player;
-mod fifo;
+    thread::spawn(move || {
+        let ring = StaticRb::<f32, 32768>::default();
+        let (mut producer, mut consumer) = ring.split();
 
-use music_player::MusicPlayer;
-use music_player::PlayerInfo;
+        let stream = device
+            .build_output_stream(
+                &config.into(),
+                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                    consumer.pop_slice(data);
+                },
+                |err| eprintln!("an error occurred on stream: {err}"),
+                None,
+            )
+            .unwrap();
+        stream.play().unwrap();
+        let mut target: Vec<i16> = vec![0; buffer_size as usize];
 
-#[cfg(target_os = "linux")]
-mod linux_player;
+        //let name = &args[1];
+        //let mut player = musix::load_song(&name).unwrap();
+        let mut player = musix::ChipPlayer::new();
 
-#[cfg(target_os = "macos")]
-mod mac_player;
+        loop {
+            if let Some(f) = cmd_consumer.try_pop() {
+                if let Some(new_player) = f(&mut player) {
+                    player = new_player;
+                }
+            }
 
-#[cfg(target_os = "windows")]
-mod win_player;
+            while let Some(meta) = player.get_changed_meta() {
+                let val = player.get_meta_string(&meta).unwrap();
+                let _ = info_producer.try_push((meta, val));
+            }
+            if producer.vacant_len() > target.len() {
+                player.get_samples(&mut target);
+                producer.push_iter(target.iter().map(|i| (*i as f32) / 32767.0));
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+    });
+    Ok(())
+}
 
-fn main() {
+fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<String> = std::env::args().collect();
 
-    let mut music_player = MusicPlayer::create("data");
-    music_player.play(&args[1]);
-    music_player.set_song(0);
-    // let mp = Rc::new(RefCell::new(music_player));
+    if args.len() < 2 {
+        println!("No song to play!");
+        return Ok(());
+    }
+
+    musix::init(Path::new("data"))?;
+
+    let cmd_buf = StaticRb::<Cmd, 32>::default();
+    let (mut cmd_producer, cmd_consumer) = cmd_buf.split();
+
+    let info_buf = StaticRb::<Info, 64>::default();
+    let (info_producer, mut info_consumer) = info_buf.split();
+
+    let _ = run_player(info_producer, cmd_consumer);
 
     enable_raw_mode().unwrap();
     stdout().execute(EnterAlternateScreen).unwrap();
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout())).unwrap();
 
+    let _ = cmd_producer.try_push(Box::new(move |_| {
+        //p.seek(2, -1);
+        musix::load_song(&args[1]).ok()
+    }));
+
     let ms = std::time::Duration::from_millis(50);
-
-    let mut sub_title: String = "".to_string();
-    let mut title: String = "Unknown".to_string();
-    let mut song_composer: String = "Unknown".to_string();
-    let mut length = 0;
-    let mut song = 0;
-    let mut songs = 1;
-    let mut seconds: f32 = 0.0;
-
     loop {
-        let mut changed = true;
-        match music_player.get_info() {
-            PlayerInfo::Title(s) => title = s,
-            PlayerInfo::Game(s) => title = s,
-            PlayerInfo::Seconds(f) => seconds = f,
-            PlayerInfo::Subtitle(s) => {
-                if s == "" {
-                    sub_title = s;
-                } else {
-                    sub_title = format!(" ({})", s);
-                }
-            }
-            PlayerInfo::Composer(composer) => song_composer = composer,
-            PlayerInfo::Length(i) => length = i,
-            PlayerInfo::Song(i) => song = i,
-            PlayerInfo::Songs(i) => songs = i,
-            _ => changed = false,
-        }
-        if changed {
-            terminal.draw(|frame| {
-                let secs = seconds as i32;
-                let t = format!("TITLE   : {}{}\nCOMPOSER: {}\nLENGTH  : {:02}:{:02} / {:02}:{:02}\nSONG    : {:02}/{:02}",
-                                title, sub_title, song_composer, secs / 60, secs % 60, length / 60, length % 60, song + 1, songs);
+        terminal
+            .draw(|frame| {
                 frame.render_widget(
-                    Paragraph::new(t).block(Block::default().title("Play Music").borders(Borders::ALL)),
+                    Paragraph::new("X")
+                        .block(Block::default().title("Play Music").borders(Borders::ALL)),
                     frame.size(),
                 )
-            }).unwrap();
-        }
+            })
+            .unwrap();
         if event::poll(ms).unwrap() {
             if let Event::Key(key) = event::read().unwrap() {
                 if key.kind == event::KeyEventKind::Press {
                     if key.code == KeyCode::Char('q') {
                         break;
                     }
-                    if key.code == KeyCode::Char('n') || key.code == KeyCode::Right {
-                        music_player.next_song();
-                    }
-                    if key.code == KeyCode::Char('p') || key.code == KeyCode::Left {
-                        music_player.prev_song();
-                    }
+                    //if key.code == KeyCode::Char('n') || key.code == KeyCode::Right {
+                    //    music_player.next_song();
+                    //}
+                    //if key.code == KeyCode::Char('p') || key.code == KeyCode::Left {
+                    //    music_player.prev_song();
+                    //}
                 }
             }
         }
-    }
 
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        while let Some((meta, val)) = info_consumer.try_pop() {
+            //println!("{meta} = {val}");
+        }
+    }
     disable_raw_mode().unwrap();
     stdout().execute(LeaveAlternateScreen).unwrap();
+    Ok(())
 }

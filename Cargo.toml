@@ -16,7 +16,9 @@ winapi = { version = "0.3", features = ["winuser", "mmreg", "mmsystem", "mmeapi"
 [dependencies]
 crossterm = "0.27.0"
 ratatui = "0.26.1"
-musix = "0.1"
+musix = { path = "../musicplayer/" }
+cpal = "0.15.3"
+ringbuf = "0.4.1"
 
 [build-dependencies]
 cmake = "0.1.31"
