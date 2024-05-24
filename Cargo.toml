@@ -10,6 +10,8 @@ musix = { path = "../musicplayer/" }
 cpal = "0.15.3"
 ringbuf = "0.4.1"
 new_string_template = "1.5.1"
+strfmt = "0.2.4"
+spectrum-analyzer = "1.5.0"
 
 [build-dependencies]
 cmake = "0.1.31"
