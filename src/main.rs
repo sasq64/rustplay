@@ -1,16 +1,17 @@
 #![allow(dead_code)]
 
-use std::collections::HashMap;
-use std::fmt::Write as XWrite;
-use std::io::Write as YWrite;
+use std::collections::{HashMap, VecDeque};
+use std::fmt::Write as _;
+use std::io::Write as _;
 use std::io::{self, stdout};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::{error::Error, path::Path};
 use strfmt::{strfmt, DisplayStr};
 
-use ringbuf::{traits::*, StaticRb};
+use ringbuf::{traits::*, HeapRb, StaticRb};
 
 use crossterm::{
     cursor,
@@ -25,13 +26,14 @@ use crossterm::{
 
 mod player;
 
-use player::{Cmd, Info, Value};
+use player::{Cmd, Info, PlayResult, Player, Value};
 
 impl DisplayStr for Value {
     fn display_str(&self, f: &mut strfmt::Formatter) -> strfmt::Result<()> {
         match self {
             Value::Text(s) => f.write_str(s.as_str()).unwrap(),
             Value::Number(n) => write!(f, "{:02}", n).unwrap(),
+            Value::Error(e) => write!(f, "{}", e).unwrap(),
             Value::Data(_) => (),
         }
         Ok(())
@@ -50,6 +52,7 @@ struct RustPlay<CP, IC> {
     length: i32,
     data: Vec<f32>,
     player_thread: Option<JoinHandle<()>>,
+    song_queue: VecDeque<PathBuf>,
 }
 
 impl<CP, IC> RustPlay<CP, IC>
@@ -107,29 +110,37 @@ where
         Ok(())
     }
 
+    fn send_cmd(&mut self, f: impl FnOnce(&mut Player) -> PlayResult + Send + 'static) {
+        if self.cmd_producer.try_push(Box::new(f)).is_err() {
+            panic!("");
+        }
+    }
+
     fn handle_keys(&mut self) -> Result<bool, io::Error> {
         let ms = std::time::Duration::from_millis(40);
-        if event::poll(ms)? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == event::KeyEventKind::Press {
-                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                    // println!("CODE {:?} {:?}", key.code, key.modifiers);
-                    if key.code == KeyCode::Char('q') || (key.code == KeyCode::Char('c') && ctrl) {
-                        return Ok(true);
-                    }
-                    if key.code == KeyCode::Char('n') {
-                        let _ = self.cmd_producer.try_push(Box::new(|p| p.next()));
-                    }
-                    if key.code == KeyCode::Right {
-                        let _ = self.cmd_producer.try_push(Box::new(|p| p.next_song()));
-                    }
-                    if key.code == KeyCode::Left {
-                        let _ = self.cmd_producer.try_push(Box::new(|p| p.prev_song()));
-                    }
+        if !event::poll(ms)? {
+            return Ok(false);
+        }
+        if let Event::Key(key) = event::read()? {
+            if key.kind == event::KeyEventKind::Press {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                match key.code {
+                    KeyCode::Char('q') => return Ok(true),
+                    KeyCode::Char('c') if ctrl => return Ok(true),
+                    KeyCode::Char('n') => self.next(),
+                    KeyCode::Right => self.send_cmd(|p| p.next_song()),
+                    KeyCode::Left => self.send_cmd(|p| p.prev_song()),
+                    _ => {}
                 }
             }
         }
         Ok(false)
+    }
+
+    fn next(&mut self) {
+        if let Some(s) = self.song_queue.pop_front() {
+            self.send_cmd(move |p| p.load(&s));
+        }
     }
 
     fn update_meta(&mut self) {
@@ -138,6 +149,7 @@ where
                 Value::Number(n) => {
                     self.meta_changed = true;
                     match meta.as_str() {
+                        "done" => self.next(),
                         "length" => {
                             self.song_meta.insert(
                                 "len".to_owned(),
@@ -156,16 +168,25 @@ where
                 Value::Text(_) => {
                     self.meta_changed = true;
                 }
+                Value::Error(_) => {}
                 Value::Data(_) => {}
             }
             self.song_meta.insert(meta, val);
         }
     }
+
+    fn add_songs(&mut self, names: &[&str]) {}
+
+    //fn add_songs_iter<I: IntoIterator<Item = Path>>(&mut self, names: &I) {
+    //    self.song_queue.extend(*names);
+    //}
+
     fn add_song(&mut self, song: &Path) {
-        let pb = song.to_owned();
-        let _ = self
-            .cmd_producer
-            .try_push(Box::new(move |p| p.add_song(&pb)));
+        // let pb = song.to_owned();
+        // let _ = self
+        //     .cmd_producer
+        //     .try_push(Box::new(move |p| p.add_song(&pb)));
+        self.song_queue.push_back(song.to_owned());
     }
 
     fn quit(&mut self) -> Result<(), Box<dyn Error>> {
@@ -181,7 +202,7 @@ where
 impl RustPlay<(), ()> {
     fn new() -> RustPlay<impl Producer<Item = Cmd>, impl Consumer<Item = Info>> {
         // Send commands to player
-        let cmd_buf = StaticRb::<Cmd, 16>::default();
+        let cmd_buf = HeapRb::<Cmd>::new(5);
         let (cmd_producer, cmd_consumer) = cmd_buf.split();
 
         // Receive info from player
@@ -193,6 +214,7 @@ impl RustPlay<(), ()> {
             ("title".to_owned(), Value::Text("<?>".to_owned())),
             ("song".to_owned(), Value::Number(0)),
             ("isong".to_owned(), Value::Number(1)),
+            ("len".to_owned(), Value::Number(0)),
             ("songs".to_owned(), Value::Number(1)),
             ("format".to_owned(), Value::Text("<?>".to_owned())),
             ("composer".to_owned(), Value::Text("<?>".to_owned())),
@@ -210,7 +232,8 @@ impl RustPlay<(), ()> {
             songs : 1,
             length : 0,
             data : Vec::new(),
-            player_thread : Some(player::run_player(info_producer, cmd_consumer, msec))
+            player_thread : Some(player::run_player(info_producer, cmd_consumer, msec)),
+            song_queue : VecDeque::new()
         }
     }
 }
@@ -233,15 +256,24 @@ fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
     }
 }
 
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    songs: Vec<PathBuf>,
+}
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let args: Vec<String> = std::env::args().collect();
+    let args = Args::parse();
 
     let mut rust_play = RustPlay::new();
 
-    if args.len() < 2 {
+    if args.songs.is_empty() {
         rust_play.add_song(Path::new("music.s3m"));
-        //println!("No song to play!");
-        //return Ok(());
+    }
+    for song in args.songs {
+        rust_play.add_song(&song);
     }
 
     enable_raw_mode()?;
@@ -249,9 +281,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .execute(EnterAlternateScreen)?
         .execute(cursor::Hide)?;
 
-    for song in &args[1..] {
-        rust_play.add_song(Path::new(&song));
-    }
     loop {
         let do_quit = rust_play.handle_keys()?;
         if do_quit {

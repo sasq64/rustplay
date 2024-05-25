@@ -20,15 +20,16 @@ pub(crate) enum Value {
     Text(String),
     Number(i32),
     Data(Vec<u8>),
+    Error(MusicError),
 }
 
-type PlayResult = Result<bool, MusicError>;
+pub(crate) type PlayResult = Result<bool, MusicError>;
 
 pub(crate) type Cmd = Box<dyn FnOnce(&mut Player) -> PlayResult + Send>;
 pub(crate) type Info = (String, Value);
 
 pub(crate) struct Player {
-    chip_player: ChipPlayer,
+    chip_player: Option<ChipPlayer>,
     song: i32,
     millis: Arc<AtomicUsize>,
     song_queue: VecDeque<PathBuf>,
@@ -55,19 +56,23 @@ impl Player {
     }
 
     pub fn next_song(&mut self) -> PlayResult {
-        self.chip_player.seek(self.song + 1, 0);
-        self.reset();
+        if let Some(cp) = &self.chip_player {
+            cp.seek(self.song + 1, 0);
+            self.reset();
+        }
         Ok(true)
     }
     pub fn prev_song(&mut self) -> PlayResult {
-        self.chip_player.seek(self.song - 1, 0);
-        self.reset();
+        if let Some(cp) = &self.chip_player {
+            cp.seek(self.song - 1, 0);
+            self.reset();
+        }
         Ok(true)
     }
 
     pub fn load(&mut self, name: &Path) -> PlayResult {
-        self.chip_player = ChipPlayer::new();
-        self.chip_player = musix::load_song(name)?;
+        self.chip_player = None;
+        self.chip_player = Some(musix::load_song(name)?);
         self.reset();
         self.playing = true;
         Ok(true)
@@ -124,7 +129,7 @@ where
         let mut target: Vec<i16> = vec![0; buffer_size];
 
         let mut player = Player {
-            chip_player: musix::ChipPlayer::new(),
+            chip_player: None,
             song: 0,
             millis: msec_outside,
             song_queue: VecDeque::new(),
@@ -132,56 +137,61 @@ where
             quitting: false,
         };
 
+        let _ = info_producer.try_push(("done".to_string(), Value::Number(0)));
         let mut temp: Vec<f32> = vec![0.0; buffer_size];
         loop {
             if player.quitting {
                 break;
             }
             while let Some(f) = cmd_consumer.try_pop() {
-                let _ = f(&mut player);
+                if let Err(e) = f(&mut player) {
+                    let _ = info_producer.try_push(("error".to_string(), Value::Error(e)));
+                }
             }
 
             if !player.playing {
                 let _ = player.next();
             }
 
-            while let Some(meta) = player.chip_player.get_changed_meta() {
-                let val = player.chip_player.get_meta_string(&meta).unwrap();
-                let v: Value = match meta.as_str() {
-                    "song" | "startSong" => {
-                        player.song = val.parse::<i32>().unwrap();
-                        Value::Number(player.song)
-                    }
-                    "songs" | "length" => {
-                        let l = val.parse::<i32>().unwrap();
-                        Value::Number(l)
-                    }
-                    &_ => Value::Text(val),
-                };
-                let _ = info_producer.try_push((meta, v));
-            }
-            if producer.vacant_len() > target.len() {
-                player.chip_player.get_samples(&mut target);
-                for i in 0..target.len() {
-                    temp[i] = (target[i] as f32) / 32767.0;
+            if let Some(cp) = &mut player.chip_player {
+                while let Some(meta) = cp.get_changed_meta() {
+                    let val = cp.get_meta_string(&meta).unwrap();
+                    let v: Value = match meta.as_str() {
+                        "song" | "startSong" => {
+                            player.song = val.parse::<i32>().unwrap();
+                            Value::Number(player.song)
+                        }
+                        "songs" | "length" => {
+                            let l = val.parse::<i32>().unwrap();
+                            Value::Number(l)
+                        }
+                        &_ => Value::Text(val),
+                    };
+                    let _ = info_producer.try_push((meta, v));
                 }
-                producer.push_slice(&temp);
-                let mix: Vec<f32> = temp.chunks(2).map(|a| a[0] + a[1]).collect();
-                let window = hann_window(&mix);
-                let spectrum = samples_fft_to_spectrum(
-                    &window,
-                    //&temp,
-                    44100,
-                    FrequencyLimit::Range(15.0, 1500.0),
-                    Some(&scale_20_times_log10), //divide_by_N_sqrt),
-                )
-                .unwrap();
-                let data = spectrum
-                    .data()
-                    .iter()
-                    .map(|(_, j)| (j.val() * 0.75) as u8)
-                    .collect();
-                let _ = info_producer.try_push(("fft".to_owned(), Value::Data(data)));
+                if producer.vacant_len() > target.len() {
+                    cp.get_samples(&mut target);
+                    for i in 0..target.len() {
+                        temp[i] = (target[i] as f32) / 32767.0;
+                    }
+                    producer.push_slice(&temp);
+                    let mix: Vec<f32> = temp.chunks(2).map(|a| a[0] + a[1]).collect();
+                    let window = hann_window(&mix);
+                    let spectrum = samples_fft_to_spectrum(
+                        &window,
+                        //&temp,
+                        44100,
+                        FrequencyLimit::Range(15.0, 1500.0),
+                        Some(&scale_20_times_log10), //divide_by_N_sqrt),
+                    )
+                    .unwrap();
+                    let data = spectrum
+                        .data()
+                        .iter()
+                        .map(|(_, j)| (j.val() * 0.75) as u8)
+                        .collect();
+                    let _ = info_producer.try_push(("fft".to_owned(), Value::Data(data)));
+                }
             } else {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
