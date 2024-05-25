@@ -175,7 +175,7 @@ where
                         temp[i] = (target[i] as f32) / 32767.0;
                     }
                     producer.push_slice(&temp);
-                    let mix: Vec<f32> = temp.chunks(2).map(|a| a[0] + a[1]).collect();
+                    let mix: Vec<f32> = temp.chunks(4).map(|a| a.iter().sum()).collect();
                     let window = hann_window(&mix);
                     let spectrum = samples_fft_to_spectrum(
                         &window,
