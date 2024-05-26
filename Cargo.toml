@@ -4,6 +4,9 @@ version = "0.2.0"
 authors = ["Jonas Minnberg <sasq64@gmail.com>"]
 edition = "2018"
 
+[profile.release]
+debug = 1
+
 [dependencies]
 crossterm = "0.27.0"
 musix = { path = "../musicplayer/" }

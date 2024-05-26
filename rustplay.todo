@@ -1,0 +1,16 @@
+
+[x] Handle unset meta in template
+[x] Reset meta between songs
+[x] Show Game instead of Title as needed
+[ ] Play/pause function
+[ ] Pause time fade animation
+[ ] Show next song
+[ ] Color theme choice
+[ ] Colored template
+[ ] Auto them from light/dark shell
+[ ] No subsong switch down from zero or up from max (unless zero)
+[ ] Short analyzer to right or long below
+[ ] Song fail: Show error, no sound and go to next after delay
+[x] Add directories recursively
+[ ] Handler non 44100 songs
+[ ] Handle long texts

@@ -2,6 +2,7 @@
 
 use std::{
     error::Error,
+    fs,
     path::{Path, PathBuf},
 };
 

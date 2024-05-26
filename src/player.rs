@@ -35,6 +35,7 @@ pub(crate) struct Player {
     song_queue: VecDeque<PathBuf>,
     playing: bool,
     quitting: bool,
+    new_song: bool,
 }
 
 impl Player {
@@ -74,6 +75,7 @@ impl Player {
         self.chip_player = None;
         self.chip_player = Some(musix::load_song(name)?);
         self.reset();
+        self.new_song = true;
         self.playing = true;
         Ok(true)
     }
@@ -135,6 +137,7 @@ where
             song_queue: VecDeque::new(),
             playing: false,
             quitting: false,
+            new_song: true,
         };
 
         let _ = info_producer.try_push(("done".to_string(), Value::Number(0)));
@@ -154,6 +157,11 @@ where
             }
 
             if let Some(cp) = &mut player.chip_player {
+                if player.new_song {
+                    player.new_song = false;
+                    let _ = info_producer.try_push(("new".to_owned(), Value::Number(0)));
+                }
+
                 while let Some(meta) = cp.get_changed_meta() {
                     let val = cp.get_meta_string(&meta).unwrap();
                     let v: Value = match meta.as_str() {
@@ -191,9 +199,11 @@ where
                         .map(|(_, j)| (j.val() * 0.75) as u8)
                         .collect();
                     let _ = info_producer.try_push(("fft".to_owned(), Value::Data(data)));
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
             } else {
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                std::thread::sleep(std::time::Duration::from_millis(100));
             }
         }
     })

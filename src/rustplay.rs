@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Write as _;
+use std::fs;
 use std::io::Write as _;
 use std::io::{self, stdout};
 use std::path::PathBuf;
@@ -9,7 +10,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::{error::Error, path::Path};
-use strfmt::{strfmt, DisplayStr};
+use strfmt::{strfmt, DisplayStr, FmtError};
 
 use ringbuf::{traits::*, HeapRb, StaticRb};
 
@@ -51,6 +52,62 @@ pub(crate) struct RustPlay<CP, IC> {
     data: Vec<f32>,
     player_thread: Option<JoinHandle<()>>,
     song_queue: VecDeque<PathBuf>,
+}
+
+impl RustPlay<(), ()> {
+    pub fn new() -> RustPlay<impl Producer<Item = Cmd>, impl Consumer<Item = Info>> {
+        // Send commands to player
+        let cmd_buf = HeapRb::<Cmd>::new(5);
+        let (cmd_producer, cmd_consumer) = cmd_buf.split();
+
+        // Receive info from player
+        let info_buf = StaticRb::<Info, 64>::default();
+        let (info_producer, info_consumer) = info_buf.split();
+        let msec = Arc::new(AtomicUsize::new(0));
+
+        Self::setup_term().unwrap();
+
+        let mut song_meta = HashMap::<String, Value>::new();
+
+        let templ = "TITLE:    {full_title}\r\n          {sub_title}\r\nCOMPOSER: {composer}\r\nFORMAT:   {format}\r\n\nTIME: 00:00:00 ({len}) SONG: {isong}/{songs}";
+        while let Err(e) = strfmt(templ, &song_meta) {
+            if let FmtError::KeyError(ke) = e {
+                let (_, key) = ke.as_str().rsplit_once(' ').unwrap();
+                song_meta.insert(key.to_string(), Value::Text("".to_string()));
+            }
+        }
+
+        RustPlay {
+            cmd_producer,
+            info_consumer,
+            templ,
+            meta_changed: false,
+            msec: msec.clone(),
+            song_meta,
+            song: 0,
+            songs: 1,
+            length: 0,
+            data: Vec::new(),
+            player_thread: Some(crate::player::run_player(info_producer, cmd_consumer, msec)),
+            song_queue: VecDeque::new(),
+        }
+    }
+
+    fn setup_term() -> io::Result<()> {
+        enable_raw_mode()?;
+        stdout()
+            .execute(EnterAlternateScreen)?
+            .execute(cursor::Hide)?;
+        Ok(())
+    }
+
+    fn restore_term() -> io::Result<()> {
+        disable_raw_mode()?;
+        stdout()
+            .execute(LeaveAlternateScreen)?
+            .execute(cursor::Show)?;
+        Ok(())
+    }
 }
 
 impl<CP, IC> RustPlay<CP, IC>
@@ -136,9 +193,24 @@ where
     }
 
     pub fn next(&mut self) {
+        self.clear_meta();
         if let Some(s) = self.song_queue.pop_front() {
             self.send_cmd(move |p| p.load(&s));
         }
+    }
+
+    fn update_title(&self, title: &str, game: &str) -> String {
+        if game.is_empty() {
+            title.to_string()
+        } else if title.is_empty() {
+            game.to_string()
+        } else {
+            format!("{} ({})", title, game)
+        }
+    }
+
+    fn set_meta(&mut self, what: &str, value: String) {
+        self.song_meta.insert(what.to_string(), Value::Text(value));
     }
 
     pub fn update_meta(&mut self) {
@@ -163,7 +235,24 @@ where
                         &_ => {}
                     }
                 }
-                Value::Text(_) => {
+                Value::Text(ref t) => {
+                    match meta.as_str() {
+                        "title" => {
+                            if let Some(Value::Text(ref game)) = self.song_meta.get("game") {
+                                self.set_meta("full_title", self.update_title(t, game));
+                            } else {
+                                self.set_meta("full_title", self.update_title(t, ""));
+                            }
+                        }
+                        "game" => {
+                            if let Some(Value::Text(ref title)) = self.song_meta.get("title") {
+                                self.set_meta("full_title", self.update_title(title, t));
+                            } else {
+                                self.set_meta("full_title", self.update_title("", t));
+                            }
+                        }
+                        &_ => {}
+                    }
                     self.meta_changed = true;
                 }
                 Value::Error(_) => {}
@@ -173,12 +262,22 @@ where
         }
     }
 
+    fn clear_meta(&mut self) {
+        self.song_meta.iter_mut().for_each(|(_, val)| match val {
+            Value::Text(t) => *t = "".to_string(),
+            Value::Number(n) => *n = 0,
+            _ => (),
+        });
+    }
+
     pub fn add_song(&mut self, song: &Path) {
-        // let pb = song.to_owned();
-        // let _ = self
-        //     .cmd_producer
-        //     .try_push(Box::new(move |p| p.add_song(&pb)));
-        self.song_queue.push_back(song.to_owned());
+        if song.is_dir() {
+            for p in fs::read_dir(song).unwrap() {
+                self.add_song(&p.unwrap().path());
+            }
+        } else {
+            self.song_queue.push_back(song.to_owned());
+        }
     }
 
     pub fn quit(&mut self) -> Result<(), Box<dyn Error>> {
@@ -186,70 +285,10 @@ where
         let _ = self.cmd_producer.try_push(Box::new(move |p| p.quit()));
         if let Err(err) = self.player_thread.take().unwrap().join() {
             eprintln!("THREAD ERROR: {:?}", err);
-            //eprintln!(msg);
         }
         Ok(())
     }
 }
-
-impl RustPlay<(), ()> {
-    fn setup_term() -> io::Result<()> {
-        enable_raw_mode()?;
-        stdout()
-            .execute(EnterAlternateScreen)?
-            .execute(cursor::Hide)?;
-        Ok(())
-    }
-
-    fn restore_term() -> io::Result<()> {
-        disable_raw_mode()?;
-        stdout()
-            .execute(LeaveAlternateScreen)?
-            .execute(cursor::Show)?;
-        Ok(())
-    }
-
-    pub fn new() -> RustPlay<impl Producer<Item = Cmd>, impl Consumer<Item = Info>> {
-        // Send commands to player
-        let cmd_buf = HeapRb::<Cmd>::new(5);
-        let (cmd_producer, cmd_consumer) = cmd_buf.split();
-
-        // Receive info from player
-        let info_buf = StaticRb::<Info, 64>::default();
-        let (info_producer, info_consumer) = info_buf.split();
-        let msec = Arc::new(AtomicUsize::new(0));
-
-        let mut song_meta = HashMap::<String, Value>::from([
-            ("title".to_owned(), Value::Text("<?>".to_owned())),
-            ("song".to_owned(), Value::Number(0)),
-            ("isong".to_owned(), Value::Number(1)),
-            ("len".to_owned(), Value::Number(0)),
-            ("songs".to_owned(), Value::Number(1)),
-            ("format".to_owned(), Value::Text("<?>".to_owned())),
-            ("composer".to_owned(), Value::Text("<?>".to_owned())),
-            ("sub_title".to_owned(), Value::Text("<?>".to_owned())),
-        ]);
-        song_meta.insert("title".to_owned(), Value::Text("No title".to_owned()));
-
-        Self::setup_term().unwrap();
-
-        RustPlay {
-            cmd_producer,
-            info_consumer,
-            templ: "TITLE:    {title}\r\n          {sub_title}\r\nCOMPOSER: {composer}\r\nFORMAT:   {format}\r\n\nTIME: 00:00:00 ({len}) SONG: {isong}/{songs}",
-            meta_changed : false,
-            msec: msec.clone(),
-            song_meta,
-            song : 0,
-            songs : 1,
-            length : 0,
-            data : Vec::new(),
-            player_thread : Some(crate::player::run_player(info_producer, cmd_consumer, msec)),
-            song_queue : VecDeque::new()
-        }
-    }
-}
-
 fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
     let c = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
     for x in 0..bars.len() {
