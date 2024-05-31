@@ -16,6 +16,8 @@ use spectrum_analyzer::{samples_fft_to_spectrum, scaling::*, windows::*, Frequen
 
 use musix::{ChipPlayer, MusicError};
 
+use crate::Args;
+
 pub(crate) enum Value {
     Text(String),
     Number(i32),
@@ -87,6 +89,7 @@ impl Player {
 }
 
 pub(crate) fn run_player<P, C>(
+    args: &Args,
     mut info_producer: P,
     mut cmd_consumer: C,
     msec: Arc<AtomicUsize>,
@@ -100,13 +103,17 @@ where
     let device = cpal::default_host().default_output_device().unwrap();
     let mut config = device.default_output_config().unwrap();
     let configs = device.supported_output_configs().unwrap();
-    let buffer_size = 4096;
+    let buffer_size = 4096 / 2;
     for conf in configs {
         if let Some(conf2) = conf.try_with_sample_rate(cpal::SampleRate(44100)) {
             config = conf2;
             break;
         }
     }
+
+    let min_freq = args.min_freq as f32;
+    let max_freq = args.max_freq as f32;
+    let fft_div = args.fft_div * 2;
 
     let msec_outside = msec.clone();
 
@@ -142,6 +149,7 @@ where
 
         let _ = info_producer.try_push(("done".to_string(), Value::Number(0)));
         let mut temp: Vec<f32> = vec![0.0; buffer_size];
+
         loop {
             if player.quitting {
                 break;
@@ -182,14 +190,14 @@ where
                     for i in 0..target.len() {
                         temp[i] = (target[i] as f32) / 32767.0;
                     }
+                    let mix: Vec<f32> = temp.chunks(fft_div).map(|a| a.iter().sum()).collect();
                     producer.push_slice(&temp);
-                    let mix: Vec<f32> = temp.chunks(4).map(|a| a.iter().sum()).collect();
                     let window = hann_window(&mix);
                     let spectrum = samples_fft_to_spectrum(
                         &window,
                         //&temp,
                         44100,
-                        FrequencyLimit::Range(15.0, 1500.0),
+                        FrequencyLimit::Range(min_freq, max_freq),
                         Some(&scale_20_times_log10), //divide_by_N_sqrt),
                     )
                     .unwrap();

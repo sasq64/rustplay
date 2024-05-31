@@ -4,9 +4,9 @@
 [x] Show Game instead of Title as needed
 [ ] Play/pause function
 [ ] Pause time fade animation
-[ ] Show next song
+[x] Show next song
 [ ] Color theme choice
-[ ] Colored template
+[x] Colored template
 [ ] Auto them from light/dark shell
 [ ] No subsong switch down from zero or up from max (unless zero)
 [ ] Short analyzer to right or long below
@@ -14,3 +14,63 @@
 [x] Add directories recursively
 [ ] Handler non 44100 songs
 [ ] Handle long texts
+
+FUTURE
+
+SONG SOURCES
+
+Default is directory; index all files (cache metadata?)
+
+REMOTE: Text file with meta data and URLs
+
+Queries; Full text search in meta data
+
+Hierarchy; Form nav tree from meta data
+
+Join? Always current "view", grep in current dir
+
+VIEW "/" everything
+/<source>/
+
+
+## Make it Work Make it Good Make it Fast / Kent Beck
+
+Unix Way
+
+## Simple things should be simple, complex things should be possible / Alan Kay
+
+At parc
+
+
+# When in doubt, leave it out / OLD (also Joshua Bloch)
+
+Regarding APIs
+
+# You aint gonna need it / XP (Titus Winters ?)
+
+John Carmack wrote "It is hard for less experienced developers to appreciate how rarely architecting for future requirements / applications turns out net-positive."[9]
+
+Premature coding / complexity
+
+Hyrum's Law
+
+With a sufficient number of users of an API,
+it does not matter what you promise in the contract:
+all observable behaviors of your system
+will be depended on by somebody.
+
+Another effective technique is to explain your code to someone else.  This will often cause you to explain the bug to yourself.  Sometimes it takes no more than a few sentences, followed by an embarrassed “Never mind, I see what’s wrong.  Sorry to bother you.”  This works remarkably well; you can even use non-programmers as listeners.  One university computer center kept a teddy bear near the help desk.  Students with mysterious bugs were required to explain them to the bear before they could speak to a human counselor.
+
+Brian Kernighan and Rob Pike, in The Practice of Programming
+
+ANTI QUOTES
+
+Work smart not hard
+
+"Its not an OR relationship its an AND relationship" 
+
+Work shorter days because you are not effecient after ...
+
+John Carmack: You are still _net positive_ for much longer
+
+
