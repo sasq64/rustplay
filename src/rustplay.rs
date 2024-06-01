@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::{error::Error, path::Path};
 
+use musix::MusicError;
 use ringbuf::{traits::*, HeapRb, StaticRb};
 
 use crossterm::{
@@ -40,6 +41,16 @@ impl Display for Value {
     }
 }
 
+#[derive(Default)]
+struct State {
+    changed: bool,
+    meta: HashMap<String, Value>,
+    msec: Arc<AtomicUsize>,
+    song: i32,
+    songs: i32,
+    length: i32,
+}
+
 pub(crate) struct RustPlay<CP, IC> {
     cmd_producer: CP,
     info_consumer: IC,
@@ -55,23 +66,22 @@ pub(crate) struct RustPlay<CP, IC> {
     song_queue: VecDeque<PathBuf>,
     fft_pos: VisualizerPos,
     fft_height: usize,
+    errors: VecDeque<String>,
+    state: State,
 }
 
 impl RustPlay<(), ()> {
     pub fn new(args: &Args) -> RustPlay<impl Producer<Item = Cmd>, impl Consumer<Item = Info>> {
         // Send commands to player
-        let cmd_buf = HeapRb::<Cmd>::new(5);
-        let (cmd_producer, cmd_consumer) = cmd_buf.split();
+        let (cmd_producer, cmd_consumer) = HeapRb::<Cmd>::new(5).split();
 
         // Receive info from player
-        let info_buf = StaticRb::<Info, 64>::default();
-        let (info_producer, info_consumer) = info_buf.split();
+        let (info_producer, info_consumer) = StaticRb::<Info, 64>::default().split();
         let msec = Arc::new(AtomicUsize::new(0));
 
         Self::setup_term().unwrap();
 
-        let t = include_str!("../screen.templ");
-        let templ = Template::new(t, 72, 10);
+        let templ = Template::new(include_str!("../screen.templ"), 72, 10);
 
         RustPlay {
             cmd_producer,
@@ -93,6 +103,8 @@ impl RustPlay<(), ()> {
             song_queue: VecDeque::new(),
             fft_pos: args.visualizer,
             fft_height: args.visualizer_height,
+            errors: VecDeque::new(),
+            state: Default::default(),
         }
     }
 
@@ -256,6 +268,10 @@ where
         self.song_meta.insert(what.to_string(), Value::Text(value));
     }
 
+    fn show_error(&mut self, e: &MusicError) {
+        self.errors.push_back(e.to_string());
+    }
+
     pub fn update_meta(&mut self) {
         while let Some((meta, val)) = self.info_consumer.try_pop() {
             match val {
@@ -281,7 +297,9 @@ where
                 Value::Text(_) => {
                     self.meta_changed = true;
                 }
-                Value::Error(_) => {}
+                Value::Error(ref e) => {
+                    self.show_error(e);
+                }
                 Value::Data(_) => {}
             }
             self.song_meta.insert(meta, val);

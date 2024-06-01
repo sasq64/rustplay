@@ -1,5 +1,6 @@
 use std::{
     collections::VecDeque,
+    error::Error,
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -134,11 +135,11 @@ where
     let msec_outside = msec.clone();
 
     thread::spawn(move || {
-        let ring = StaticRb::<f32, 8192>::default();
-        let (mut producer, mut consumer) = ring.split();
+        let main = move || -> Result<(), Box<dyn Error>> {
+            let ring = StaticRb::<f32, 8192>::default();
+            let (mut producer, mut consumer) = ring.split();
 
-        let stream = device
-            .build_output_stream(
+            let stream = device.build_output_stream(
                 &config.into(),
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     consumer.pop_slice(data);
@@ -147,88 +148,95 @@ where
                 },
                 |err| eprintln!("An error occurred on stream: {err}"),
                 None,
-            )
-            .unwrap();
-        stream.play().unwrap();
+            )?;
+            stream.play()?;
 
-        let mut target: Vec<i16> = vec![0; buffer_size];
+            let mut target: Vec<i16> = vec![0; buffer_size];
 
-        let mut player = Player {
-            chip_player: None,
-            song: 0,
-            millis: msec_outside,
-            song_queue: VecDeque::new(),
-            playing: false,
-            quitting: false,
-            new_song: true,
-        };
+            let mut player = Player {
+                chip_player: None,
+                song: 0,
+                millis: msec_outside,
+                song_queue: VecDeque::new(),
+                playing: false,
+                quitting: false,
+                new_song: true,
+            };
 
-        let _ = info_producer.try_push(("done".into(), 0.into()));
-        let mut temp: Vec<f32> = vec![0.0; buffer_size];
+            let _ = info_producer.try_push(("done".into(), 0.into()));
+            let mut temp: Vec<f32> = vec![0.0; buffer_size];
 
-        loop {
-            if player.quitting {
-                break;
-            }
-            while let Some(f) = cmd_consumer.try_pop() {
-                if let Err(e) = f(&mut player) {
-                    let _ = info_producer.try_push(("error".into(), e.into()));
+            loop {
+                if player.quitting {
+                    break;
                 }
-            }
-
-            if !player.playing {
-                let _ = player.next();
-            }
-
-            if let Some(cp) = &mut player.chip_player {
-                if player.new_song {
-                    player.new_song = false;
-                    let _ = info_producer.try_push(("new".into(), 0.into()));
-                }
-
-                while let Some(meta) = cp.get_changed_meta() {
-                    let val = cp.get_meta_string(&meta).unwrap();
-                    let v: Value = match meta.as_str() {
-                        "song" | "startSong" => {
-                            player.song = val.parse::<i32>().unwrap();
-                            player.song.into()
-                        }
-                        "songs" | "length" => {
-                            let length = val.parse::<i32>().unwrap();
-                            length.into()
-                        }
-                        &_ => Value::Text(val),
-                    };
-                    let _ = info_producer.try_push((meta, v));
-                }
-                if producer.vacant_len() > target.len() {
-                    cp.get_samples(&mut target);
-                    for i in 0..target.len() {
-                        temp[i] = (target[i] as f32) / 32767.0;
+                while let Some(f) = cmd_consumer.try_pop() {
+                    if let Err(e) = f(&mut player) {
+                        let _ = info_producer.try_push(("error".into(), e.into()));
                     }
-                    let mix: Vec<f32> = temp.chunks(fft_div).map(|a| a.iter().sum()).collect();
-                    producer.push_slice(&temp);
-                    let window = hann_window(&mix);
-                    let spectrum = samples_fft_to_spectrum(
-                        &window,
-                        //&temp,
-                        44100,
-                        FrequencyLimit::Range(min_freq, max_freq),
-                        Some(&scale_20_times_log10), //divide_by_N_sqrt),
-                    )
-                    .unwrap();
-                    let data = spectrum
-                        .data()
-                        .iter()
-                        .map(|(_, j)| (j.val() * 0.75) as u8)
-                        .collect();
-                    let _ = info_producer.try_push(("fft".into(), Value::Data(data)));
-                } else {
-                    std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-            } else {
-                std::thread::sleep(std::time::Duration::from_millis(100));
+
+                if !player.playing {
+                    let _ = player.next();
+                }
+
+                if let Some(cp) = &mut player.chip_player {
+                    if player.new_song {
+                        player.new_song = false;
+                        let _ = info_producer.try_push(("new".into(), 0.into()));
+                    }
+
+                    while let Some(meta) = cp.get_changed_meta() {
+                        let val = cp.get_meta_string(&meta).unwrap();
+                        let v: Value = match meta.as_str() {
+                            "song" | "startSong" => {
+                                player.song = val.parse::<i32>()?;
+                                player.song.into()
+                            }
+                            "songs" | "length" => {
+                                let length = val.parse::<i32>()?;
+                                length.into()
+                            }
+                            &_ => Value::Text(val),
+                        };
+                        let _ = info_producer.try_push((meta, v));
+                    }
+                    if producer.vacant_len() > target.len() {
+                        let rc = cp.get_samples(&mut target);
+                        if rc == 0 {
+                            let _ = info_producer.try_push(("done".into(), 0.into()));
+                        }
+                        for i in 0..target.len() {
+                            temp[i] = (target[i] as f32) / 32767.0;
+                        }
+                        let mix: Vec<f32> = temp.chunks(fft_div).map(|a| a.iter().sum()).collect();
+                        producer.push_slice(&temp);
+                        let window = hann_window(&mix);
+                        let spectrum = samples_fft_to_spectrum(
+                            &window,
+                            //&temp,
+                            44100,
+                            FrequencyLimit::Range(min_freq, max_freq),
+                            Some(&scale_20_times_log10), //divide_by_N_sqrt),
+                        )
+                        .map_err(|e| MusicError {
+                            msg: "FFT Error".into(),
+                        })?;
+                        let data = spectrum
+                            .data()
+                            .iter()
+                            .map(|(_, j)| (j.val() * 0.75) as u8)
+                            .collect();
+                        let _ = info_producer.try_push(("fft".into(), Value::Data(data)));
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                } else {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
             }
-        }
+            Ok(())
+        };
+        main().unwrap();
     })
 }
