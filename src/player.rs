@@ -8,7 +8,7 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use cpal::traits::*;
+use cpal::{traits::*, SampleFormat};
 
 use ringbuf::{traits::*, StaticRb};
 
@@ -23,6 +23,24 @@ pub(crate) enum Value {
     Number(i32),
     Data(Vec<u8>),
     Error(MusicError),
+}
+
+impl From<i32> for Value {
+    fn from(item: i32) -> Self {
+        Value::Number(item)
+    }
+}
+
+impl From<String> for Value {
+    fn from(item: String) -> Self {
+        Value::Text(item)
+    }
+}
+
+impl From<MusicError> for Value {
+    fn from(item: MusicError) -> Self {
+        Value::Error(item)
+    }
 }
 
 pub(crate) type PlayResult = Result<bool, MusicError>;
@@ -101,15 +119,13 @@ where
     musix::init(Path::new("data")).unwrap();
 
     let device = cpal::default_host().default_output_device().unwrap();
-    let mut config = device.default_output_config().unwrap();
-    let configs = device.supported_output_configs().unwrap();
+    let mut configs = device.supported_output_configs().unwrap();
     let buffer_size = 4096 / 2;
-    for conf in configs {
-        if let Some(conf2) = conf.try_with_sample_rate(cpal::SampleRate(44100)) {
-            config = conf2;
-            break;
-        }
-    }
+
+    let sconf = configs
+        .find(|conf| conf.channels() == 2 && conf.sample_format() == SampleFormat::F32)
+        .expect("Could not find a compatible audio config");
+    let config = sconf.with_sample_rate(cpal::SampleRate(44100));
 
     let min_freq = args.min_freq as f32;
     let max_freq = args.max_freq as f32;
@@ -147,7 +163,7 @@ where
             new_song: true,
         };
 
-        let _ = info_producer.try_push(("done".to_string(), Value::Number(0)));
+        let _ = info_producer.try_push(("done".into(), 0.into()));
         let mut temp: Vec<f32> = vec![0.0; buffer_size];
 
         loop {
@@ -156,7 +172,7 @@ where
             }
             while let Some(f) = cmd_consumer.try_pop() {
                 if let Err(e) = f(&mut player) {
-                    let _ = info_producer.try_push(("error".to_string(), Value::Error(e)));
+                    let _ = info_producer.try_push(("error".into(), e.into()));
                 }
             }
 
@@ -167,7 +183,7 @@ where
             if let Some(cp) = &mut player.chip_player {
                 if player.new_song {
                     player.new_song = false;
-                    let _ = info_producer.try_push(("new".to_owned(), Value::Number(0)));
+                    let _ = info_producer.try_push(("new".into(), 0.into()));
                 }
 
                 while let Some(meta) = cp.get_changed_meta() {
@@ -175,11 +191,11 @@ where
                     let v: Value = match meta.as_str() {
                         "song" | "startSong" => {
                             player.song = val.parse::<i32>().unwrap();
-                            Value::Number(player.song)
+                            player.song.into()
                         }
                         "songs" | "length" => {
-                            let l = val.parse::<i32>().unwrap();
-                            Value::Number(l)
+                            let length = val.parse::<i32>().unwrap();
+                            length.into()
                         }
                         &_ => Value::Text(val),
                     };
@@ -206,7 +222,7 @@ where
                         .iter()
                         .map(|(_, j)| (j.val() * 0.75) as u8)
                         .collect();
-                    let _ = info_producer.try_push(("fft".to_owned(), Value::Data(data)));
+                    let _ = info_producer.try_push(("fft".into(), Value::Data(data)));
                 } else {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
