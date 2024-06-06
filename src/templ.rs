@@ -13,6 +13,7 @@ struct PlaceHolder {
     start: usize,
     end: usize,
     col: usize,
+    len: usize,
     line: usize,
     color: u32,
 }
@@ -65,10 +66,11 @@ impl Template {
                 let r = (ph.color >> 16) as u8;
                 let g = ((ph.color >> 8) & 0xff) as u8;
                 let b = (ph.color & 0xff) as u8;
+                let l = usize::min(text.len(), ph.len);
                 let _ = stdout()
                     .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
                     .queue(SetForegroundColor(Color::Rgb { r, g, b }))?
-                    .queue(Print(text))?;
+                    .queue(Print(&text[..l]))?;
             }
         }
         Ok(())
@@ -102,7 +104,6 @@ impl Template {
     ///
     pub fn new(templ: &str, w: usize, h: usize) -> Template {
         let spaces = "                                                                   ";
-        let re = Regex::new(r"\$((\w+)|>(.)|(\^))").unwrap();
         let re2 = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?").unwrap();
         let mut out = Vec::<String>::new();
         let mut data = HashMap::<String, PlaceHolder>::new();
@@ -114,15 +115,15 @@ impl Template {
         let mut lines: Vec<&str> = templ.lines().collect();
         lines.retain(|line| {
             if let Some(m) = re2.captures(line) {
-                println!("@MATCH {}", m.get(0).unwrap().as_str());
+                //println!("@MATCH {}", m.get(0).unwrap().as_str());
                 let var = m.get(1).unwrap().as_str();
                 if let Some(alias) = m.get(2) {
                     renames.insert(alias.as_str(), var);
                 }
                 if let Some(color) = m.get(4) {
-                    println!("@COLOR {}", color.as_str());
+                    //println!("@COLOR {}", color.as_str());
                     let rgb = u32::from_str_radix(color.as_str(), 16).unwrap();
-                    println!("@COLOR {}", rgb);
+                    //println!("@COLOR {}", rgb);
                     colors.insert(var, rgb);
                 }
                 return false;
@@ -130,19 +131,20 @@ impl Template {
             true
         });
 
-        println!("PASS 1");
+        //println!("PASS 1");
+        let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))").unwrap();
         for (i, line) in lines.iter_mut().enumerate() {
             //let mut target: Vec<char> = line.chars().collect();
             let mut target = line.to_owned();
             for cap in re.captures_iter(line) {
                 let m = cap.get(0).unwrap();
-                println!("MATCH '{}'", m.as_str());
-                if let Some(x) = cap.get(3) {
+                //println!("MATCH '{}'", m.as_str());
+                if let Some(x) = cap.name("char") {
                     let target_len = target.chars().count();
                     if w > target_len {
-                        println!("W {} T {}", w, target_len);
+                        //println!("W {} T {}", w, target_len);
                         let len = (w - target_len) + 3;
-                        println!("LINE FILL {} LEN {}", x.as_str(), len);
+                        //println!("LINE FILL {} LEN {}", x.as_str(), len);
                         let r = x.as_str().repeat(len);
                         target.replace_range(m.start()..m.end(), &r);
                     } else {
@@ -150,7 +152,7 @@ impl Template {
                         target.replace_range(m.start()..m.end(), &r);
                     }
                 }
-                if cap.get(4).is_some() {
+                if cap.name("fill").is_some() {
                     dup_lines.push(i);
                     target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
                 }
@@ -168,16 +170,16 @@ impl Template {
                 n += 1;
             }
         }
-        println!("PASS 2");
+        //println!("PASS 2");
         for (i, target) in out.iter_mut().enumerate() {
             //let mut target: Vec<char> = line.chars().collect();
             let mut clears = Vec::new();
             for cap in re.captures_iter(target) {
                 let m = cap.get(0).unwrap();
-                println!("MATCH {}", m.as_str());
-                if let Some(x) = cap.get(2) {
+                //println!("MATCH {}", m.as_str());
+                if let Some(x) = cap.name("var") {
                     // Word
-                    println!("WORD {}", x.as_str());
+                    //println!("WORD {}", x.as_str());
                     let n: &str;
                     if let Some(new_name) = renames.get(x.as_str()) {
                         n = new_name;
@@ -189,17 +191,19 @@ impl Template {
                         color = *new_color;
                     }
                     let col = target[..m.start()].chars().count();
+                    let len = target[..m.end()].chars().count() - col;
                     data.insert(
                         n.to_owned(),
                         PlaceHolder {
                             start: m.start(),
                             end: m.end(),
                             col,
+                            len,
                             line: i,
                             color,
                         },
                     );
-                    clears.push((m.start(), m.end()));
+                    clears.push((m.start(), x.end()));
                 }
             }
             for (start, end) in clears {
@@ -240,13 +244,29 @@ mod tests {
 +--=-+--$>------+
 @name=gargamel
 "#,
-            40,
-            18,
+            20,
+            5,
         );
 
         let text = result.render_string(&HashMap::from([("hello", "DOG!")]));
         println!("{}", text);
-        assert!(text == "Line     \nX   !\n----------");
+        assert!(
+            text == r#"+----+-------------+
+|    | DOG!        |
++----+-------------+
+|    |             |
++--=-+-------------+"#
+        );
+
+        let text = result.render_string(&HashMap::from([("hello", "a much longer string")]));
+        println!("{}", text);
+        assert!(
+            text == r#"+----+-------------+
+|    | a much longe|
++----+-------------+
+|    |             |
++--=-+-------------+"#
+        );
     }
 
     #[test]
@@ -263,7 +283,7 @@ mod tests {
         //let templ = Template::new("TITLE:    $full_title\n          $sub_title\nCOMPOSER: $composer\nFORMAT:   $format\n\nTIME: 00:00:00 ($len) SONG: $isong/$songs", 60, 10);
         let templ = Template::new(include_str!("../screen.templ"), 80, 10);
         let x = templ.render_string(&song_meta);
-        println!("{}", x);
-        panic!();
+
+        assert!(x.chars().count() > 400);
     }
 }

@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
 use std::{
+    cell::RefCell,
     error::Error,
     path::{Path, PathBuf},
+    rc::Rc,
 };
 
 mod player;
@@ -12,6 +14,8 @@ mod templ;
 use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
+
+use rhai::Engine;
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum VisualizerPos {
@@ -26,7 +30,7 @@ enum VisualizerPos {
 //     }
 // }
 
-#[derive(Parser, Debug)]
+#[derive(Parser, Debug, Clone)]
 #[command(version, about, author, long_about = None)]
 struct Args {
     songs: Vec<PathBuf>,
@@ -49,22 +53,53 @@ struct Args {
     #[arg(long, short = 'H', default_value_t = 5)]
     // Height of visualizer in characters
     visualizer_height: usize,
+
+    #[arg(long, default_value_t = false)]
+    no_term: bool,
+}
+
+#[derive(Clone)]
+struct Settings {
+    args: Args,
+    template: String,
+    width: i32,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let args = Args::parse();
+    let s = Settings {
+        args: Args::parse(),
+        template: "".to_owned(),
+        width: -1,
+    };
+    let settings = Rc::new(RefCell::new(s));
 
-    let mut rust_play = RustPlay::new(&args);
+    let mut engine = Engine::new();
 
-    if args.songs.is_empty() {
+    let sclone = settings.clone();
+    engine.register_fn("template", move |t: &str| {
+        sclone.borrow_mut().template = t.to_owned()
+    });
+
+    let p = Path::new("init.rhai");
+    if p.is_file() {
+        engine.run_file(p.into())?;
+    } else {
+        let script = include_str!("../init.rhai");
+        engine.run(script)?;
+    }
+
+    let ss = settings.clone().borrow().clone();
+    let mut rust_play = RustPlay::new(&ss);
+
+    if settings.borrow().args.songs.is_empty() {
         let p = Path::new("music.s3m");
         if p.is_file() {
-            rust_play.add_song(p);
+            rust_play.add_song(p)?;
         }
     }
 
-    for song in args.songs {
-        rust_play.add_song(&song);
+    for song in settings.borrow().args.songs.iter() {
+        rust_play.add_song(song)?;
     }
 
     loop {
