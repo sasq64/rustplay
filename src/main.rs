@@ -15,8 +15,6 @@ use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
 
-use rhai::Engine;
-
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum VisualizerPos {
     None,
@@ -34,16 +32,17 @@ enum VisualizerPos {
 #[command(version, about, author, long_about = None)]
 struct Args {
     songs: Vec<PathBuf>,
-    /// Min frequency to show in visualizer
+
     #[arg(long, default_value_t = 15)]
+    /// Min frequency to show in visualizer
     min_freq: u32,
 
     #[arg(long, default_value_t = 4000)]
     /// Max frequency to show in visualizer
     max_freq: u32,
 
-    /// Where to show the visualizer
     #[arg(long, short = 'o', default_value = "right")]
+    /// Where to show the visualizer
     visualizer: VisualizerPos,
 
     #[arg(long, short = 'd', default_value_t = 2)]
@@ -66,36 +65,31 @@ struct Settings {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let s = Settings {
+    let settings = Rc::new(RefCell::new(Settings {
         args: Args::parse(),
         template: "".to_owned(),
         width: -1,
-    };
-    let settings = Rc::new(RefCell::new(s));
+    }));
 
-    let mut engine = Engine::new();
+    let mut rhai_engine = rhai::Engine::new();
 
-    let sclone = settings.clone();
-    engine.register_fn("template", move |t: &str| {
-        sclone.borrow_mut().template = t.to_owned()
+    rhai_engine.register_fn("template", {
+        let sclone = settings.clone();
+        move |t: &str| sclone.borrow_mut().template = t.to_owned()
     });
 
     let p = Path::new("init.rhai");
     if p.is_file() {
-        engine.run_file(p.into())?;
+        rhai_engine.run_file(p.into())?;
     } else {
         let script = include_str!("../init.rhai");
-        engine.run(script)?;
+        rhai_engine.run(script)?;
     }
 
-    let ss = settings.clone().borrow().clone();
-    let mut rust_play = RustPlay::new(&ss);
+    let mut rust_play = RustPlay::new(settings.clone())?;
 
     if settings.borrow().args.songs.is_empty() {
-        let p = Path::new("music.s3m");
-        if p.is_file() {
-            rust_play.add_song(p)?;
-        }
+        settings.borrow_mut().args.songs.push(PathBuf::from("../musicplayer/music"));
     }
 
     for song in settings.borrow().args.songs.iter() {

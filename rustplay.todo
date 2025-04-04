@@ -32,6 +32,23 @@ Join? Always current "view", grep in current dir
 VIEW "/" everything
 /<source>/
 
+-----------------
+-----------------
+
+-----------------
+
+SHOW vs HIDE
+
+* Color of comments
+
+* static_cast<>
+
+* Wrapping in text editors
+
+* Fatal errors / error messages
+
+
+
 
 ## Make it Work Make it Good Make it Fast / Kent Beck
 

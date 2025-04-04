@@ -5,18 +5,18 @@ use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     thread::{self, JoinHandle},
 };
 
-use cpal::{traits::*, SampleFormat};
+use cpal::{SampleFormat, SampleRate, traits::*};
 
 use id3::{Tag, TagLike};
-use ringbuf::{traits::*, StaticRb};
+use ringbuf::{StaticRb, traits::*};
 
-use spectrum_analyzer::{samples_fft_to_spectrum, scaling::*, windows::*, FrequencyLimit};
+use spectrum_analyzer::{FrequencyLimit, samples_fft_to_spectrum, scaling::*, windows::*};
 
 use musix::{ChipPlayer, MusicError};
 
@@ -35,7 +35,7 @@ impl Display for Value {
             Value::Text(s) => f.write_str(s.as_str()).unwrap(),
             Value::Number(n) => write!(f, "{:02}", n).unwrap(),
             Value::Error(e) => write!(f, "{}", e).unwrap(),
-            Value::Data(_) => (),
+            Value::Data(_) => write!(f, "Data").unwrap(),
         }
         Ok(())
     }
@@ -59,6 +59,12 @@ impl From<&str> for Value {
     }
 }
 
+impl From<Vec<u8>> for Value {
+    fn from(item: Vec<u8>) -> Self {
+        Value::Data(item)
+    }
+}
+
 impl From<MusicError> for Value {
     fn from(item: MusicError) -> Self {
         Value::Error(item)
@@ -67,7 +73,9 @@ impl From<MusicError> for Value {
 
 pub(crate) type PlayResult = Result<bool, MusicError>;
 
+// Cmd is used for pushing commands to the player
 pub(crate) type Cmd = Box<dyn FnOnce(&mut Player) -> PlayResult + Send>;
+// Info is used for receiving information from the player
 pub(crate) type Info = (String, Value);
 
 fn parse_mp3<R: Read>(reader: &mut R) -> io::Result<bool> {
@@ -126,14 +134,6 @@ impl Player {
     }
 }
 
-fn push<IP: Producer<Item = Info>, V: Into<Value>>(ip: &mut IP, name: &str, val: V) -> PlayResult {
-    ip.try_push((name.to_owned(), val.into()))
-        .map_err(|_| MusicError {
-            msg: "Could not push".to_owned(),
-        })?;
-    Ok(true)
-}
-
 trait PushValue {
     fn push_value<V: Into<Value>>(&mut self, name: &str, val: V) -> PlayResult;
 }
@@ -159,21 +159,34 @@ pub(crate) fn run_player<P, C>(
     mut info_producer: P,
     mut cmd_consumer: C,
     msec: Arc<AtomicUsize>,
-) -> JoinHandle<()>
+) -> Result<JoinHandle<()>, MusicError>
 where
     P: Producer<Item = Info> + Send + 'static,
     C: Consumer<Item = Cmd> + Send + 'static,
 {
-    musix::init(Path::new("data")).unwrap();
+    musix::init(Path::new("data"))?;
 
-    let device = cpal::default_host().default_output_device().unwrap();
-    let mut configs = device.supported_output_configs().unwrap();
+    let device = cpal::default_host()
+        .default_output_device()
+        .ok_or_else(|| MusicError {
+            msg: "No audio device available".into(),
+        })?;
+
+    let mut configs = device.supported_output_configs().map_err(|e| MusicError {
+        msg: format!("Could not get audio configs: {}", e),
+    })?;
     let buffer_size = 4096 / 2;
 
     let sconf = configs
-        .find(|conf| conf.channels() == 2 && conf.sample_format() == SampleFormat::F32)
-        .expect("Could not find a compatible audio config");
-    let config = sconf.with_sample_rate(cpal::SampleRate(44100));
+        .find(|conf| {
+            conf.channels() == 2
+                && conf.sample_format() == SampleFormat::F32
+                && conf.max_sample_rate() >= cpal::SampleRate(44100)
+        })
+        .ok_or_else(|| MusicError {
+            msg: "Could not find a compatible audio config".into(),
+        })?;
+    let config = sconf.with_sample_rate(SampleRate(44100));
 
     let min_freq = args.min_freq as f32;
     let max_freq = args.max_freq as f32;
@@ -181,7 +194,7 @@ where
 
     let msec_outside = msec.clone();
 
-    thread::spawn(move || {
+    Ok(thread::spawn(move || {
         let main = move || -> Result<(), Box<dyn Error>> {
             let ring = StaticRb::<f32, 8192>::default();
             let (mut producer, mut consumer) = ring.split();
@@ -214,31 +227,29 @@ where
                 }
                 while let Some(f) = cmd_consumer.try_pop() {
                     if let Err(e) = f(&mut player) {
-                        push(&mut info_producer, "error", e)?;
+                        info_producer.push_value("error", e)?;
                     }
                 }
 
                 if let Some(cp) = &mut player.chip_player {
                     if let Some(new_song) = player.new_song.take() {
                         //println!("New song {}", new_song.to_str().unwrap());
-                        push(&mut info_producer, "new", 0)?;
+                        info_producer.push_value("new", 0)?;
                         if let Some(ext) = new_song.extension() {
                             if ext == "mp3" {
                                 if let Ok(duration) = mp3_duration::from_path(&new_song) {
                                     let secs = duration.as_secs() as i32;
-                                    push(&mut info_producer, "length", secs)?;
+                                    info_producer.push_value("length", secs)?;
                                 }
-                                //println!("Found mp3");
                                 let tag = Tag::read_from_path(new_song)?;
-                                //println!("Found tag");
                                 if let Some(album) = tag.album() {
-                                    push(&mut info_producer, "album", album)?;
+                                    info_producer.push_value("album", album)?;
                                 }
                                 if let Some(artist) = tag.artist() {
-                                    push(&mut info_producer, "composer", artist)?;
+                                    info_producer.push_value("composer", artist)?;
                                 }
                                 if let Some(title) = tag.title() {
-                                    push(&mut info_producer, "title", title)?;
+                                    info_producer.push_value("title", title)?;
                                 }
                             }
                         }
@@ -262,12 +273,12 @@ where
                             }
                             &_ => Value::Text(val),
                         };
-                        push(&mut info_producer, &meta, v)?;
+                        info_producer.push_value(&meta, v)?;
                     }
                     if producer.vacant_len() > target.len() {
                         let rc = cp.get_samples(&mut target);
                         if rc == 0 {
-                            push(&mut info_producer, "done", 0)?;
+                            info_producer.push_value("done", 0)?;
                         }
                         for i in 0..target.len() {
                             temp[i] = (target[i] as f32) / 32767.0;
@@ -285,12 +296,12 @@ where
                         .map_err(|_| MusicError {
                             msg: "FFT Error".into(),
                         })?;
-                        let data = spectrum
+                        let data: Vec<u8> = spectrum
                             .data()
                             .iter()
                             .map(|(_, j)| (j.val() * 0.75) as u8)
                             .collect();
-                        push(&mut info_producer, "fft", Value::Data(data))?;
+                        info_producer.push_value("fft", data)?;
                     } else {
                         std::thread::sleep(std::time::Duration::from_millis(10));
                     }
@@ -301,5 +312,5 @@ where
             Ok(())
         };
         main().unwrap();
-    })
+    }))
 }

@@ -7,7 +7,7 @@ use std::hash::Hash;
 
 use std::io::{self, stdout};
 
-use crossterm::{cursor, style::Print, QueueableCommand};
+use crossterm::{QueueableCommand, cursor, style::Print};
 
 struct PlaceHolder {
     start: usize,
@@ -26,6 +26,10 @@ pub struct Template {
 impl Template {
     fn as_string(&self) -> String {
         self.templ.join("\n")
+    }
+
+    pub fn height(&self) -> usize {
+        self.templ.len()
     }
 
     pub fn render<T: Display, Q: Hash + Eq + Borrow<str>>(
@@ -55,7 +59,7 @@ impl Template {
         y: u16,
     ) -> io::Result<()> {
         for (i, line) in self.templ.iter().enumerate() {
-            let _ = stdout()
+            stdout()
                 .queue(cursor::MoveTo(x, y + i as u16))?
                 .queue(Print(line))?;
         }
@@ -67,7 +71,7 @@ impl Template {
                 let g = ((ph.color >> 8) & 0xff) as u8;
                 let b = (ph.color & 0xff) as u8;
                 let l = usize::min(text.len(), ph.len);
-                let _ = stdout()
+                stdout()
                     .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
                     .queue(SetForegroundColor(Color::Rgb { r, g, b }))?
                     .queue(Print(&text[..l]))?;

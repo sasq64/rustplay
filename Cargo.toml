@@ -2,7 +2,7 @@
 name = "musplay"
 version = "0.2.0"
 authors = ["Jonas Minnberg <sasq64@gmail.com>"]
-edition = "2018"
+edition = "2024"
 
 [profile.release]
 debug = 1
@@ -22,4 +22,5 @@ regex = "1.10.4"
 rhai = "1.18.0"
 id3 = "1.13.1"
 mp3-duration = "0.1.10"
+tantivy = "0.22.0"
 

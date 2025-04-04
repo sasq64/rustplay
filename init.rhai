@@ -10,6 +10,6 @@ template(`
 @isong=a
 @songs=b
 @sub_title=:#a0a0a0
-@full_title=:#ffffff
+@full_title=:#000000
 @TEXT=:#20e020
 `)
