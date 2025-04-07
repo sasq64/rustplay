@@ -108,8 +108,8 @@ impl Template {
     ///
     pub fn new(templ: &str, w: usize, h: usize) -> Template {
         let spaces = "                                                                   ";
-        let re2 = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?").unwrap();
-        let mut out = Vec::<String>::new();
+        let alias_re = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?").unwrap();
+        //let mut out = Vec::<String>::new();
         let mut data = HashMap::<String, PlaceHolder>::new();
         let mut dup_lines = Vec::new();
 
@@ -117,64 +117,70 @@ impl Template {
         let mut colors: HashMap<&str, u32> = HashMap::new();
 
         let mut lines: Vec<&str> = templ.lines().collect();
+        // Strip alias assignments from template
         lines.retain(|line| {
-            if let Some(m) = re2.captures(line) {
-                //println!("@MATCH {}", m.get(0).unwrap().as_str());
+            if let Some(m) = alias_re.captures(line) {
                 let var = m.get(1).unwrap().as_str();
                 if let Some(alias) = m.get(2) {
                     renames.insert(alias.as_str(), var);
                 }
                 if let Some(color) = m.get(4) {
-                    //println!("@COLOR {}", color.as_str());
                     let rgb = u32::from_str_radix(color.as_str(), 16).unwrap();
-                    //println!("@COLOR {}", rgb);
                     colors.insert(var, rgb);
                 }
                 return false;
             }
             true
         });
+        let h = if h > lines.len() { h } else { lines.len() };
 
-        //println!("PASS 1");
+        // Find fill patterns ($> and $^), resize vertically and prepare for horizontal
         let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))").unwrap();
-        for (i, line) in lines.iter_mut().enumerate() {
-            //let mut target: Vec<char> = line.chars().collect();
-            let mut target = line.to_owned();
-            for cap in re.captures_iter(line) {
-                let m = cap.get(0).unwrap();
-                //println!("MATCH '{}'", m.as_str());
-                if let Some(x) = cap.name("char") {
-                    let target_len = target.chars().count();
-                    if w > target_len {
-                        //println!("W {} T {}", w, target_len);
-                        let len = (w - target_len) + 3;
-                        //println!("LINE FILL {} LEN {}", x.as_str(), len);
-                        let r = x.as_str().repeat(len);
-                        target.replace_range(m.start()..m.end(), &r);
-                    } else {
-                        let r = x.as_str().repeat(2);
-                        target.replace_range(m.start()..m.end(), &r);
+        let mut out: Vec<String> = lines
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                //let mut target: Vec<char> = line.chars().collect();
+                let mut target = line.to_string();
+                for cap in re.captures_iter(line) {
+                    let m = cap.get(0).unwrap();
+                    //println!("MATCH '{}'", m.as_str());
+                    if let Some(x) = cap.name("char") {
+                        let target_len = target.chars().count();
+                        if w > target_len {
+                            //println!("W {} T {}", w, target_len);
+                            let len = (w - target_len) + 3;
+                            //println!("LINE FILL {} LEN {}", x.as_str(), len);
+                            let r = x.as_str().repeat(len);
+                            target.replace_range(m.start()..m.end(), &r);
+                        } else {
+                            let r = x.as_str().repeat(2);
+                            target.replace_range(m.start()..m.end(), &r);
+                        }
+                    }
+                    if cap.name("fill").is_some() {
+                        dup_lines.push(i);
+                        target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
                     }
                 }
-                if cap.name("fill").is_some() {
-                    dup_lines.push(i);
-                    target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
+                target
+            })
+            .collect();
+
+        // Duplicate lines until we reach target height
+        if !dup_lines.is_empty() {
+            let s = (h - out.len()) as f32 / dup_lines.len() as f32;
+            let mut n = 0;
+            let mut f = 0.0;
+            for i in dup_lines.iter().rev() {
+                f += s;
+                while (n as f32) < f {
+                    out.insert(*i, out[*i].clone());
+                    n += 1;
                 }
             }
-            out.push(target);
         }
 
-        let s = (h - out.len()) as f32 / dup_lines.len() as f32;
-        let mut n = 0;
-        let mut f = 0.0;
-        for i in dup_lines.iter().rev() {
-            f += s;
-            while (n as f32) < f {
-                out.insert(*i, out[*i].clone());
-                n += 1;
-            }
-        }
-        //println!("PASS 2");
         for (i, target) in out.iter_mut().enumerate() {
             //let mut target: Vec<char> = line.chars().collect();
             let mut clears = Vec::new();
@@ -231,7 +237,7 @@ mod tests {
         let data = HashMap::from([("one", 9)]);
         let result = Template::new("Line $one\nX $x!\n---$>--", 10, 3);
         let text = result.as_string();
-        println!(":: {}", text);
+        //println!(":: {}", text);
         assert!(text == "Line     \nX   !\n----------");
 
         assert!(result.data["one"].start == 5);
@@ -240,7 +246,8 @@ mod tests {
         println!("{}", r);
 
         let result = Template::new(
-            r#"@pooh=asda
+            r#"
+@pooh=asda
 +----+$>---------+
 |$^  | $hello $> |
 +----+--------$>-+
@@ -253,9 +260,10 @@ mod tests {
         );
 
         let text = result.render_string(&HashMap::from([("hello", "DOG!")]));
-        println!("{}", text);
+        //println!("{}", text);
         assert!(
-            text == r#"+----+-------------+
+            text == r#"
++----+-------------+
 |    | DOG!        |
 +----+-------------+
 |    |             |
@@ -263,10 +271,12 @@ mod tests {
         );
 
         let text = result.render_string(&HashMap::from([("hello", "a much longer string")]));
-        println!("{}", text);
-        assert!(
-            text == r#"+----+-------------+
-|    | a much longe|
+        //println!("{}", text);
+        assert_eq!(
+            text,
+            r#"
++----+-------------+
+|    | a much longer string
 +----+-------------+
 |    |             |
 +--=-+-------------+"#

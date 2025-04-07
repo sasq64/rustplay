@@ -1,3 +1,5 @@
+#![warn(clippy::all)]
+//, clippy::uninlined_format_args, clippy::unwrap_used)]
 #![allow(dead_code)]
 
 use std::{
@@ -15,8 +17,9 @@ use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
 
-#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
+#[derive(Default, ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum VisualizerPos {
+    #[default]
     None,
     Right,
     Below,
@@ -28,7 +31,7 @@ enum VisualizerPos {
 //     }
 // }
 
-#[derive(Parser, Debug, Clone)]
+#[derive(Default, Parser, Debug, Clone)]
 #[command(version, about, author, long_about = None)]
 struct Args {
     songs: Vec<PathBuf>,
@@ -65,6 +68,8 @@ struct Settings {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    // Settings is passed to RHAI and needs static lifetime => Rc
+    // Needs to be modified by RHAI => RefCell (could be Cell)
     let settings = Rc::new(RefCell::new(Settings {
         args: Args::parse(),
         template: "".to_owned(),
@@ -74,8 +79,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut rhai_engine = rhai::Engine::new();
 
     rhai_engine.register_fn("template", {
-        let sclone = settings.clone();
-        move |t: &str| sclone.borrow_mut().template = t.to_owned()
+        let settings = settings.clone();
+        move |t: &str| settings.borrow_mut().template = t.to_owned()
     });
 
     let p = Path::new("init.rhai");
@@ -86,10 +91,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         rhai_engine.run(script)?;
     }
 
-    let mut rust_play = RustPlay::new(settings.clone())?;
+    let mut rust_play = RustPlay::new(settings.borrow().clone())?;
 
     if settings.borrow().args.songs.is_empty() {
-        settings.borrow_mut().args.songs.push(PathBuf::from("../musicplayer/music"));
+        settings
+            .borrow_mut()
+            .args
+            .songs
+            .push(PathBuf::from("../musicplayer/music"));
     }
 
     for song in settings.borrow().args.songs.iter() {

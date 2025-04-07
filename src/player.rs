@@ -182,6 +182,7 @@ where
             conf.channels() == 2
                 && conf.sample_format() == SampleFormat::F32
                 && conf.max_sample_rate() >= cpal::SampleRate(44100)
+                && conf.min_sample_rate() <= cpal::SampleRate(44100)
         })
         .ok_or_else(|| MusicError {
             msg: "Could not find a compatible audio config".into(),
@@ -197,12 +198,12 @@ where
     Ok(thread::spawn(move || {
         let main = move || -> Result<(), Box<dyn Error>> {
             let ring = StaticRb::<f32, 8192>::default();
-            let (mut producer, mut consumer) = ring.split();
+            let (mut audio_sink, mut audio_faucet) = ring.split();
 
             let stream = device.build_output_stream(
                 &config.into(),
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                    consumer.pop_slice(data);
+                    audio_faucet.pop_slice(data);
                     let ms = data.len() * 1000 / (44100 * 2);
                     msec.fetch_add(ms, Ordering::SeqCst);
                 },
@@ -219,7 +220,6 @@ where
             };
 
             info_producer.push_value("done", 0)?;
-            let mut temp: Vec<f32> = vec![0.0; buffer_size];
 
             loop {
                 if player.quitting {
@@ -275,16 +275,16 @@ where
                         };
                         info_producer.push_value(&meta, v)?;
                     }
-                    if producer.vacant_len() > target.len() {
+                    if audio_sink.vacant_len() > target.len() {
                         let rc = cp.get_samples(&mut target);
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
                         }
-                        for i in 0..target.len() {
-                            temp[i] = (target[i] as f32) / 32767.0;
-                        }
-                        let mix: Vec<f32> = temp.chunks(fft_div).map(|a| a.iter().sum()).collect();
-                        producer.push_slice(&temp);
+                        let samples: Vec<f32> =
+                            target.iter().map(|s16| (*s16 as f32) / 32767.0).collect();
+                        let mix: Vec<f32> =
+                            samples.chunks(fft_div).map(|a| a.iter().sum()).collect();
+                        audio_sink.push_slice(&samples);
                         let window = hann_window(&mix);
                         let spectrum = samples_fft_to_spectrum(
                             &window,
@@ -313,4 +313,43 @@ where
         };
         main().unwrap();
     }))
+}
+#[cfg(test)]
+mod tests {
+    use core::time;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::thread;
+
+    use ringbuf::{HeapRb, StaticRb, traits::*};
+
+    use crate::Args;
+
+    use super::Cmd;
+    use super::Info;
+
+    #[test]
+    fn player_starts() {
+        // Send commands to player
+        let (mut cmd_producer, cmd_consumer) = HeapRb::<Cmd>::new(5).split();
+
+        // Receive info from player
+        let (info_producer, _) = StaticRb::<Info, 64>::default().split();
+        let msec = Arc::new(AtomicUsize::new(0));
+        let args = Args {
+            ..Default::default()
+        };
+        let player_thread =
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
+
+        cmd_producer
+            .try_push(Box::new(move |p| p.quit()))
+            .unwrap_or_else(|_| panic!("Could not push to cmd_producer"));
+        thread::sleep(time::Duration::from_millis(500));
+        if player_thread.is_finished() {
+            player_thread.join().unwrap();
+        } else {
+            panic!("Thread did not quit");
+        }
+    }
 }

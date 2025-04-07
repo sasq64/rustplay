@@ -1,98 +1,36 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
-use std::fs;
 use std::io::Write as _;
 use std::io::{self, stdout};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::{cell::RefCell, rc::Rc};
 use std::{error::Error, path::Path, thread::JoinHandle};
+use std::{fs, panic};
 
 use crossterm::cursor::MoveToNextLine;
 use crossterm::style::SetBackgroundColor;
+use musix::MusicError;
 use ringbuf::{HeapRb, StaticRb, traits::*};
 
+use crate::player::{Cmd, Info, PlayResult, Player, Value};
+use crate::templ::Template;
+use crate::{Settings, VisualizerPos};
 use crossterm::{
-    ExecutableCommand, QueueableCommand, cursor,
+    QueueableCommand, cursor,
     event::{self, Event, KeyCode, KeyModifiers},
     style::{Color, Print, SetForegroundColor},
+    terminal,
     terminal::{
         Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
         enable_raw_mode,
     },
 };
-use tantivy::collector::TopDocs;
-use tantivy::query::QueryParser;
 
-use crate::player::{Cmd, Info, PlayResult, Player, Value};
-use crate::templ::Template;
-use crate::{Settings, VisualizerPos};
+mod indexer;
 
-use tantivy::{Index, IndexWriter, ReloadPolicy, TantivyError, doc};
-use tantivy::{IndexReader, schema::*};
-
-struct Indexer {
-    schema: Schema,
-    index: Index,
-    index_writer: IndexWriter,
-    reader: IndexReader,
-    result: Vec<String>,
-}
-
-impl Indexer {
-    pub fn new() -> Result<Self, Box<dyn Error>> {
-        let mut schema_builder = Schema::builder();
-        schema_builder.add_text_field("title", TEXT | STORED);
-        let schema = schema_builder.build();
-
-        let index = Index::create_in_ram(schema.clone());
-
-        let index_writer: IndexWriter = index.writer(20_000_000)?;
-        let reader = index
-            .reader_builder()
-            .reload_policy(ReloadPolicy::OnCommitWithDelay)
-            .try_into()?;
-        Ok(Self {
-            schema,
-            index,
-            index_writer,
-            reader,
-            result: Vec::new(),
-        })
-    }
-
-    pub fn add(&mut self, song_title: &str) {
-        let title = self.schema.get_field("title").unwrap();
-        self.index_writer
-            .add_document(doc!(title => song_title))
-            .unwrap();
-    }
-
-    pub fn commit(&mut self) {
-        self.index_writer.commit().unwrap();
-    }
-
-    pub fn search(&mut self, query: &str) -> Result<i32, TantivyError> {
-        let searcher = self.reader.searcher();
-        let title = self.schema.get_field("title")?;
-        let query_parser = QueryParser::for_index(&self.index, vec![title]);
-        let query = query_parser.parse_query(query)?;
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
-        self.result.clear();
-        for (_score, doc_address) in top_docs {
-            let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let x = doc.get_first(title).unwrap();
-            let name = match x {
-                OwnedValue::Str(name) => name,
-                _ => "",
-            };
-            self.result.push(name.into());
-        }
-        Ok(0)
-    }
-}
+use indexer::Indexer;
 
 #[derive(Default)]
 struct State {
@@ -208,16 +146,17 @@ impl Shell {
         self.cmd.iter().collect()
     }
 
-    fn command_first(&self) -> String {
-        self.cmd[..self.edit_pos].iter().collect()
-    }
-
-    fn command_last(&self) -> String {
-        self.cmd[self.edit_pos + 1..].iter().collect()
-    }
-
-    fn command_cursor(&self) -> char {
-        self.cmd[self.edit_pos]
+    fn command_line(&self) -> (String, char, String) {
+        let at_end = self.edit_pos == self.cmd.len();
+        (
+            self.cmd[..self.edit_pos].iter().collect(),
+            if at_end { ' ' } else { self.cmd[self.edit_pos] },
+            if at_end {
+                "".into()
+            } else {
+                self.cmd[self.edit_pos + 1..].iter().collect()
+            },
+        )
     }
 
     fn insert(&mut self, c: char) {
@@ -266,13 +205,11 @@ pub(crate) struct RustPlay<CP, IC> {
 
 impl RustPlay<(), ()> {
     pub fn new(
-        settings_ref: Rc<RefCell<Settings>>,
+        settings: Settings,
     ) -> Result<RustPlay<impl Producer<Item = Cmd>, impl Consumer<Item = Info>>, Box<dyn Error>>
     {
         // Send commands to player
         let (cmd_producer, cmd_consumer) = HeapRb::<Cmd>::new(5).split();
-
-        let settings = settings_ref.borrow().clone();
 
         // Receive info from player
         let (info_producer, info_consumer) = StaticRb::<Info, 64>::default().split();
@@ -282,8 +219,10 @@ impl RustPlay<(), ()> {
             Self::setup_term()?;
         }
 
+        let (w, _) = terminal::size()?;
+
         // include_str!("../screen.templ"), 72, 10
-        let templ = Template::new(&settings.template, 72, 10);
+        let templ = Template::new(&settings.template, w as usize, 10);
 
         Ok(RustPlay {
             cmd_producer,
@@ -312,14 +251,16 @@ impl RustPlay<(), ()> {
         enable_raw_mode()?;
         stdout()
             .queue(EnterAlternateScreen)?
-            .queue(cursor::Hide)?.flush()
+            .queue(cursor::Hide)?
+            .flush()
     }
 
     fn restore_term() -> io::Result<()> {
         disable_raw_mode()?;
         stdout()
             .queue(LeaveAlternateScreen)?
-            .queue(cursor::Show)?.flush()
+            .queue(cursor::Show)?
+            .flush()
     }
 }
 
@@ -341,26 +282,23 @@ where
         }
         let y = self.templ.height() as u16;
 
-        let i = self.shell.edit_pos;
-        let l = self.shell.cmd.len();
         let black_bg = SetBackgroundColor(Color::Reset);
         let cursor_bg = SetBackgroundColor(Color::White);
         let mut out = stdout();
+
+        let (first, cursor, last) = self.shell.command_line();
+
         out.queue(black_bg)?
             .queue(SetForegroundColor(Color::Red))?
             .queue(cursor::MoveTo(0, y + 1))?
             .queue(Print("> "))?
-            .queue(Print(self.shell.command_first()))?;
-
-        if i < l {
-            out.queue(SetBackgroundColor(Color::White))?
-                .queue(Print(&self.shell.command_cursor()))?
-                .queue(black_bg)?
-                .queue(Print(&self.shell.command_last()))?;
-        } else {
-            out.queue(cursor_bg)?.queue(Print(" "))?.queue(black_bg)?;
-        }
-        out.queue(black_bg)?.queue(Print(" "))?;
+            .queue(Print(first))?
+            .queue(cursor_bg)?
+            .queue(Print(cursor))?
+            .queue(black_bg)?
+            .queue(Print(last))?
+            .queue(black_bg)?
+            .queue(Print(" "))?;
         if !self.indexer.result.is_empty() {
             out.queue(Clear(ClearType::All))?;
             out.queue(cursor::MoveTo(0, 0))?;
@@ -389,6 +327,7 @@ where
                 let h = self.fft_height;
                 let mut area: Vec<char> = vec![' '; w * h];
                 print_bars(&self.data, &mut area, w, h);
+                out.queue(SetForegroundColor(Color::DarkBlue))?;
                 for i in 0..h {
                     out.queue(cursor::MoveTo(x, y + i as u16))?;
                     let u = i * w;
@@ -500,7 +439,6 @@ where
         } else {
             if let Some(info) = musix::identify_song(song) {
                 let title = String::from_utf8_lossy(info.title.to_bytes()).to_string();
-                //println!("INFO: {}", title);
                 self.indexer.add(&title);
             }
 
@@ -516,11 +454,20 @@ where
 
     pub fn quit(&mut self) -> Result<(), Box<dyn Error>> {
         if !self.no_term {
-            RustPlay::restore_term().unwrap();
+            RustPlay::restore_term()?;
         }
-        let _ = self.cmd_producer.try_push(Box::new(move |p| p.quit()));
+        if self
+            .cmd_producer
+            .try_push(Box::new(move |p| p.quit()))
+            .is_err()
+        {
+            return Err(Box::new(MusicError {
+                msg: "Quit failed".into(),
+            }));
+        }
+
         if let Err(err) = self.player_thread.take().unwrap().join() {
-            eprintln!("THREAD ERROR: {:?}", err);
+            panic::resume_unwind(err);
         }
         Ok(())
     }
@@ -537,5 +484,26 @@ fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
             target[x * 3 + 1 + y * w] = v;
             target[x * 3 + 2 + y * w] = ' ';
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RustPlay;
+    use crate::Args;
+    use crate::Settings;
+
+    #[test]
+    fn rustplay_starts() {
+        let settings = Settings {
+            args: Args {
+                no_term: true,
+                ..Default::default()
+            },
+            template: "".into(),
+            width: 10,
+        };
+        let mut rp = RustPlay::new(settings).unwrap();
+        rp.quit().unwrap();
     }
 }
