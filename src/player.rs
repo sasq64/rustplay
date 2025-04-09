@@ -16,7 +16,9 @@ use cpal::{SampleFormat, SampleRate, traits::*};
 use id3::{Tag, TagLike};
 use ringbuf::{StaticRb, traits::*};
 
-use spectrum_analyzer::{FrequencyLimit, samples_fft_to_spectrum, scaling::*, windows::*};
+use spectrum_analyzer::{
+    FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10, windows::hann_window,
+};
 
 use musix::{ChipPlayer, MusicError};
 
@@ -32,10 +34,10 @@ pub(crate) enum Value {
 impl Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Value::Text(s) => f.write_str(s.as_str()).unwrap(),
-            Value::Number(n) => write!(f, "{:02}", n).unwrap(),
-            Value::Error(e) => write!(f, "{}", e).unwrap(),
-            Value::Data(_) => write!(f, "Data").unwrap(),
+            Value::Text(s) => f.write_str(s.as_str())?,
+            Value::Number(n) => write!(f, "{n:02}")?,
+            Value::Error(e) => write!(f, "{e}")?,
+            Value::Data(_) => write!(f, "Data")?,
         }
         Ok(())
     }
@@ -85,6 +87,7 @@ fn parse_mp3<R: Read>(reader: &mut R) -> io::Result<bool> {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_field_names)]
 pub(crate) struct Player {
     chip_player: Option<ChipPlayer>,
     song: i32,
@@ -100,6 +103,7 @@ impl Player {
         self.millis.store(0, Ordering::SeqCst);
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn next_song(&mut self) -> PlayResult {
         if self.song < (self.songs - 1) {
             if let Some(cp) = &self.chip_player {
@@ -109,6 +113,7 @@ impl Player {
         }
         Ok(true)
     }
+    #[allow(clippy::unnecessary_wraps)]
     pub fn prev_song(&mut self) -> PlayResult {
         if self.song > 0 {
             if let Some(cp) = &self.chip_player {
@@ -128,6 +133,7 @@ impl Player {
         Ok(true)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn quit(&mut self) -> PlayResult {
         self.quitting = true;
         Ok(true)
@@ -173,7 +179,7 @@ where
         })?;
 
     let mut configs = device.supported_output_configs().map_err(|e| MusicError {
-        msg: format!("Could not get audio configs: {}", e),
+        msg: format!("Could not get audio configs: {e}"),
     })?;
     let buffer_size = 4096 / 2;
 
@@ -256,7 +262,7 @@ where
                     }
 
                     while let Some(meta) = cp.get_changed_meta() {
-                        let val = cp.get_meta_string(&meta).unwrap();
+                        let val = cp.get_meta_string(&meta).unwrap_or("".into());
                         let v: Value = match meta.as_str() {
                             "song" | "startSong" => {
                                 player.song = val.parse::<i32>()?;
@@ -311,7 +317,7 @@ where
             }
             Ok(())
         };
-        main().unwrap();
+        main().expect("");
     }))
 }
 #[cfg(test)]
@@ -329,6 +335,7 @@ mod tests {
     use super::Info;
 
     #[test]
+    #[allow(clippy::unwrap_used)]
     fn player_starts() {
         // Send commands to player
         let (mut cmd_producer, cmd_consumer) = HeapRb::<Cmd>::new(5).split();

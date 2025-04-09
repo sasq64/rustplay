@@ -23,6 +23,29 @@ pub struct Template {
     data: HashMap<String, PlaceHolder>,
 }
 
+fn color(color: u32) -> Color {
+    let r = (color >> 16) as u8;
+    let g = ((color >> 8) & 0xff) as u8;
+    let b = (color & 0xff) as u8;
+    Color::Rgb { r, g, b }
+}
+
+fn dup_lines(dup_indexes: &[usize], lines: &mut Vec<String>, h: usize) {
+    // Duplicate lines until we reach target height
+    if !dup_indexes.is_empty() {
+        let s = (h - lines.len()) as f32 / dup_indexes.len() as f32;
+        let mut n = 0;
+        let mut f = 0.0;
+        for i in dup_indexes.iter().rev() {
+            f += s;
+            while (n as f32) < f {
+                lines.insert(*i, lines[*i].clone());
+                n += 1;
+            }
+        }
+    }
+}
+
 impl Template {
     fn as_string(&self) -> String {
         self.templ.join("\n")
@@ -40,7 +63,7 @@ impl Template {
         for (key, val) in data {
             if let Some(ph) = self.data.get(key.borrow()) {
                 let line = &mut result[ph.line];
-                let text = format!("{}", val);
+                let text = format!("{val}");
                 let mut end = ph.start + text.len();
                 if end > line.len() {
                     end = line.len();
@@ -66,14 +89,11 @@ impl Template {
 
         for (key, val) in data {
             if let Some(ph) = self.data.get(key.borrow()) {
-                let text = format!("{}", val);
-                let r = (ph.color >> 16) as u8;
-                let g = ((ph.color >> 8) & 0xff) as u8;
-                let b = (ph.color & 0xff) as u8;
+                let text = format!("{val}");
                 let l = usize::min(text.len(), ph.len);
                 stdout()
                     .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
-                    .queue(SetForegroundColor(Color::Rgb { r, g, b }))?
+                    .queue(SetForegroundColor(color(ph.color)))?
                     .queue(Print(&text[..l]))?;
             }
         }
@@ -104,14 +124,14 @@ impl Template {
     /// Special lines
     ///
     /// Variable alias
-    /// @short_symbol = real_symbol
+    /// `@short_symbol = real_symbol`
     ///
     pub fn new(templ: &str, w: usize, h: usize) -> Template {
         let spaces = "                                                                   ";
         let alias_re = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?").unwrap();
-        //let mut out = Vec::<String>::new();
+
         let mut data = HashMap::<String, PlaceHolder>::new();
-        let mut dup_lines = Vec::new();
+        let mut dup_indexes = Vec::new();
 
         let mut renames: HashMap<&str, &str> = HashMap::new();
         let mut colors: HashMap<&str, u32> = HashMap::new();
@@ -132,7 +152,6 @@ impl Template {
             }
             true
         });
-        let h = if h > lines.len() { h } else { lines.len() };
 
         // Find fill patterns ($> and $^), resize vertically and prepare for horizontal
         let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))").unwrap();
@@ -159,7 +178,7 @@ impl Template {
                         }
                     }
                     if cap.name("fill").is_some() {
-                        dup_lines.push(i);
+                        dup_indexes.push(i);
                         target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
                     }
                 }
@@ -167,19 +186,9 @@ impl Template {
             })
             .collect();
 
+        let h = if h > lines.len() { h } else { lines.len() };
         // Duplicate lines until we reach target height
-        if !dup_lines.is_empty() {
-            let s = (h - out.len()) as f32 / dup_lines.len() as f32;
-            let mut n = 0;
-            let mut f = 0.0;
-            for i in dup_lines.iter().rev() {
-                f += s;
-                while (n as f32) < f {
-                    out.insert(*i, out[*i].clone());
-                    n += 1;
-                }
-            }
-        }
+        dup_lines(&dup_indexes, &mut out, h);
 
         for (i, target) in out.iter_mut().enumerate() {
             //let mut target: Vec<char> = line.chars().collect();
@@ -196,7 +205,7 @@ impl Template {
                     } else {
                         n = x.as_str();
                     }
-                    let mut color: u32 = 0xffffff;
+                    let mut color: u32 = 0xff_ff_ff;
                     if let Some(new_color) = colors.get(x.as_str()) {
                         color = *new_color;
                     }
@@ -243,7 +252,7 @@ mod tests {
         assert!(result.data["one"].start == 5);
 
         let r = result.render_string(&data);
-        println!("{}", r);
+        println!("{r}");
 
         let result = Template::new(
             r#"

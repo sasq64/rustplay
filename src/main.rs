@@ -1,5 +1,3 @@
-#![warn(clippy::all)]
-//, clippy::uninlined_format_args, clippy::unwrap_used)]
 #![allow(dead_code)]
 
 use std::{
@@ -44,11 +42,11 @@ struct Args {
     /// Max frequency to show in visualizer
     max_freq: u32,
 
-    #[arg(long, short = 'o', default_value = "right")]
+    #[arg(long, short = 'o', default_value = "below")]
     /// Where to show the visualizer
     visualizer: VisualizerPos,
 
-    #[arg(long, short = 'd', default_value_t = 2)]
+    #[arg(long, short = 'd', default_value_t = 4)]
     // How much to divide FFT data
     fft_div: usize,
 
@@ -101,7 +99,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .push(PathBuf::from("../musicplayer/music"));
     }
 
-    for song in settings.borrow().args.songs.iter() {
+    for song in &settings.borrow().args.songs {
         rust_play.add_song(song)?;
     }
 

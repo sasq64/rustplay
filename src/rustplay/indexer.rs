@@ -1,7 +1,10 @@
 #![allow(dead_code)]
+#![allow(clippy::unwrap_used)]
 
 use std::error::Error;
+use std::path::Path;
 
+use musix::SongInfo;
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 
@@ -14,12 +17,18 @@ pub struct Indexer {
     index_writer: IndexWriter,
     reader: IndexReader,
     pub result: Vec<String>,
+
+    title_field: Field,
+    composer_field: Field,
+    path_field: Field,
 }
 
 impl Indexer {
     pub fn new() -> Result<Self, Box<dyn Error>> {
         let mut schema_builder = Schema::builder();
-        schema_builder.add_text_field("title", TEXT | STORED);
+        let title_field = schema_builder.add_text_field("title", TEXT | STORED);
+        let composer_field = schema_builder.add_text_field("composer", TEXT | STORED);
+        let path_field = schema_builder.add_text_field("path", STORED);
         let schema = schema_builder.build();
 
         let index = Index::create_in_ram(schema.clone());
@@ -35,13 +44,18 @@ impl Indexer {
             index_writer,
             reader,
             result: Vec::new(),
+            title_field,
+            composer_field,
+            path_field,
         })
     }
 
-    pub fn add(&mut self, song_title: &str) {
-        let title = self.schema.get_field("title").unwrap();
+    pub fn add(&mut self, song_path: &Path, info: &SongInfo) {
         self.index_writer
-            .add_document(doc!(title => song_title))
+            .add_document(doc!(
+                self.title_field => info.title.clone(),
+                self.composer_field => info.composer.clone(),
+                self.path_field => song_path.to_str().unwrap().to_owned()))
             .unwrap();
     }
 
@@ -49,22 +63,27 @@ impl Indexer {
         self.index_writer.commit().unwrap();
     }
 
-    pub fn search(&mut self, query: &str) -> Result<i32, TantivyError> {
+    pub fn search(&mut self, query: &str) -> Result<(), TantivyError> {
         let searcher = self.reader.searcher();
-        let title = self.schema.get_field("title")?;
-        let query_parser = QueryParser::for_index(&self.index, vec![title]);
+        let query_parser =
+            QueryParser::for_index(&self.index, vec![self.title_field, self.composer_field]);
         let query = query_parser.parse_query(query)?;
         let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
         self.result.clear();
         for (_score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let x = doc.get_first(title).unwrap();
-            let name = match x {
+            let title_val = doc.get_first(self.title_field).unwrap();
+            let path_val = doc.get_first(self.path_field).unwrap();
+            let name = match title_val {
                 OwnedValue::Str(name) => name,
                 _ => "",
             };
-            self.result.push(name.into());
+            let path = match path_val {
+                OwnedValue::Str(name) => name,
+                _ => "",
+            };
+            self.result.push(path.into());
         }
-        Ok(0)
+        Ok(())
     }
 }

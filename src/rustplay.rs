@@ -41,6 +41,8 @@ struct State {
     length: i32,
     done: bool,
     show_error: i32,
+    select_mode: bool,
+    selected: usize,
     errors: VecDeque<String>,
 }
 
@@ -90,22 +92,15 @@ impl State {
     fn update_title(&mut self) {
         let game = self.get_meta("game");
         let title = self.get_meta("title");
-        let mut composer = self.get_meta("composer");
-        let full_title: String;
-        if game.is_empty() {
-            full_title = title.to_string();
+        let composer = self.get_meta_or("composer", "??");
+        let full_title = if game.is_empty() {
+            title.to_string()
         } else if title.is_empty() {
-            full_title = game.to_string();
+            game.to_string()
         } else {
-            full_title = format!("{} ({})", title, game);
-        }
-        if composer.is_empty() {
-            composer = "??";
-        }
-        self.set_meta(
-            "title_and_composer",
-            format!("{} / {}", full_title, composer),
-        );
+            format!("{title} ({game})")
+        };
+        self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
         self.set_meta("full_title", full_title);
     }
 
@@ -116,13 +111,20 @@ impl State {
         ""
     }
 
+    fn get_meta_or<'a>(&'a self, name: &str, def: &'a str) -> &'a str {
+        if let Some(Value::Text(t)) = self.meta.get(name) {
+            return t;
+        }
+        def
+    }
+
     fn set_meta(&mut self, what: &str, value: String) {
         self.meta.insert(what.into(), Value::Text(value));
     }
 
     fn clear_meta(&mut self) {
         self.meta.iter_mut().for_each(|(_, val)| match val {
-            Value::Text(t) => *t = "".to_string(),
+            Value::Text(t) => *t = String::new(),
             Value::Number(n) => *n = 0,
             _ => (),
         });
@@ -152,7 +154,7 @@ impl Shell {
             self.cmd[..self.edit_pos].iter().collect(),
             if at_end { ' ' } else { self.cmd[self.edit_pos] },
             if at_end {
-                "".into()
+                String::new()
             } else {
                 self.cmd[self.edit_pos + 1..].iter().collect()
             },
@@ -240,7 +242,7 @@ impl RustPlay<(), ()> {
             fft_pos: settings.args.visualizer,
             fft_height: settings.args.visualizer_height,
             errors: VecDeque::new(),
-            state: Default::default(),
+            state: State::default(),
             no_term: settings.args.no_term,
             shell: Shell::new(),
             indexer: Indexer::new()?,
@@ -280,7 +282,6 @@ where
                 .queue(SetForegroundColor(Color::Cyan))?;
             self.templ.write(&self.state.meta, 0, 0)?;
         }
-        let y = self.templ.height() as u16;
 
         let black_bg = SetBackgroundColor(Color::Reset);
         let cursor_bg = SetBackgroundColor(Color::White);
@@ -290,7 +291,7 @@ where
 
         out.queue(black_bg)?
             .queue(SetForegroundColor(Color::Red))?
-            .queue(cursor::MoveTo(0, y + 1))?
+            .queue(cursor::MoveTo(0, self.templ.height() as u16 + 1))?
             .queue(Print("> "))?
             .queue(Print(first))?
             .queue(cursor_bg)?
@@ -299,11 +300,17 @@ where
             .queue(Print(last))?
             .queue(black_bg)?
             .queue(Print(" "))?;
-        if !self.indexer.result.is_empty() {
+        if self.state.select_mode {
             out.queue(Clear(ClearType::All))?;
             out.queue(cursor::MoveTo(0, 0))?;
-            for val in self.indexer.result.iter() {
-                out.queue(Print(val))?.queue(MoveToNextLine(1))?;
+            for (i, val) in self.indexer.result.iter().enumerate() {
+                out.queue(if i == self.state.selected {
+                    cursor_bg
+                } else {
+                    black_bg
+                })?
+                .queue(Print(val))?
+                .queue(MoveToNextLine(1))?;
             }
             return out.flush();
         }
@@ -330,8 +337,6 @@ where
                 out.queue(SetForegroundColor(Color::DarkBlue))?;
                 for i in 0..h {
                     out.queue(cursor::MoveTo(x, y + i as u16))?;
-                    let u = i * w;
-                    let line: String = area[u..(u + w)].iter().collect();
                     if use_color {
                         let col: u8 = ((i * 255) / h) as u8;
                         out.queue(SetForegroundColor(Color::Rgb {
@@ -340,6 +345,8 @@ where
                             b: 0x40,
                         }))?;
                     }
+                    let offset = i * w;
+                    let line: String = area[offset..(offset + w)].iter().collect();
                     out.queue(Print(line))?;
                 }
             }
@@ -367,7 +374,7 @@ where
             let s = (play_time / 1000) % 60;
             out.queue(cursor::MoveTo(x, y))?
                 .queue(SetForegroundColor(Color::Yellow))?
-                .queue(Print(format!("{:02}:{:02}:{:02}", m, s, c)))?;
+                .queue(Print(format!("{m:02}:{s:02}:{c:02}")))?;
         }
         out.flush()?;
         Ok(())
@@ -382,6 +389,8 @@ where
     fn search(&mut self) {
         self.indexer.search(&self.shell.command()).unwrap();
         self.shell.clear();
+        self.state.select_mode = true;
+        self.state.selected = 0;
     }
 
     pub fn handle_keys(&mut self) -> Result<bool, io::Error> {
@@ -395,16 +404,43 @@ where
         if let Event::Key(key) = event::read()? {
             if key.kind == event::KeyEventKind::Press {
                 let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                match key.code {
-                    KeyCode::Esc => return Ok(true),
-                    KeyCode::Char('c') if ctrl => return Ok(true),
-                    KeyCode::Char('n') if ctrl => self.next(),
-                    KeyCode::Right => self.send_cmd(|p| p.next_song()),
-                    KeyCode::Left => self.send_cmd(|p| p.prev_song()),
-                    KeyCode::Backspace => self.shell.del(),
-                    KeyCode::Char(x) => self.shell.insert(x),
-                    KeyCode::Enter => self.search(),
-                    _ => {}
+
+                if self.state.select_mode {
+                    match key.code {
+                        KeyCode::Esc => self.state.select_mode = false,
+                        KeyCode::Char('c') if ctrl => return Ok(true),
+                        KeyCode::Char('n') if ctrl => self.next(),
+                        KeyCode::Up => {
+                            if self.state.selected > 0 {
+                                self.state.selected -= 1;
+                            }
+                        }
+                        KeyCode::Down => {
+                            if self.state.selected < self.indexer.result.len() - 1 {
+                                self.state.selected += 1;
+                            }
+                        }
+                        KeyCode::Left => self.send_cmd(Player::prev_song),
+                        KeyCode::Enter => {
+                            let path = self.indexer.result[self.state.selected].clone();
+                            self.song_queue.push_front(path.into());
+                            self.next();
+                            self.state.select_mode = false
+                        }
+                        _ => {}
+                    }
+                } else {
+                    match key.code {
+                        KeyCode::Esc => return Ok(true),
+                        KeyCode::Char('c') if ctrl => return Ok(true),
+                        KeyCode::Char('n') if ctrl => self.next(),
+                        KeyCode::Right => self.send_cmd(Player::next_song),
+                        KeyCode::Left => self.send_cmd(Player::prev_song),
+                        KeyCode::Backspace => self.shell.del(),
+                        KeyCode::Char(x) => self.shell.insert(x),
+                        KeyCode::Enter => self.search(),
+                        _ => {}
+                    }
                 }
             }
         }
@@ -438,8 +474,7 @@ where
             }
         } else {
             if let Some(info) = musix::identify_song(song) {
-                let title = String::from_utf8_lossy(info.title.to_bytes()).to_string();
-                self.indexer.add(&title);
+                self.indexer.add(song, &info);
             }
 
             self.song_queue.push_back(song.to_owned());
@@ -478,10 +513,9 @@ fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
     for x in 0..bars.len() {
         let n = (bars[x] * (h as f32 / 5.0)) as i32;
         for y in 0..h {
-            let d = ((h - y) * 8) as i32 - n;
-            let v = C[d.clamp(0, 8) as usize];
-            target[x * 3 + y * w] = v;
-            target[x * 3 + 1 + y * w] = v;
+            let bar_char = C[(((h - y) * 8) as i32 - n).clamp(0, 8) as usize];
+            target[x * 3 + y * w] = bar_char;
+            target[x * 3 + 1 + y * w] = bar_char;
             target[x * 3 + 2 + y * w] = ' ';
         }
     }
