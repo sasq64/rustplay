@@ -3,19 +3,20 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::Write as _;
 use std::io::{self, stdout};
+use std::panic;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::{error::Error, path::Path, thread::JoinHandle};
-use std::{fs, panic};
 
 use crossterm::cursor::MoveToNextLine;
 use crossterm::style::SetBackgroundColor;
 use musix::MusicError;
 use ringbuf::{HeapRb, StaticRb, traits::*};
 
-use crate::player::{Cmd, Info, PlayResult, Player, Value};
+use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
+use crate::value::*;
 use crate::{Settings, VisualizerPos};
 use crossterm::{
     QueueableCommand, cursor,
@@ -30,7 +31,7 @@ use crossterm::{
 
 mod indexer;
 
-use indexer::Indexer;
+use indexer::RemoteIndexer;
 
 #[derive(Default)]
 struct State {
@@ -44,6 +45,7 @@ struct State {
     select_mode: bool,
     selected: usize,
     errors: VecDeque<String>,
+    result: Vec<String>,
 }
 
 impl State {
@@ -202,7 +204,7 @@ pub(crate) struct RustPlay<CP, IC> {
     state: State,
     no_term: bool,
     shell: Shell,
-    indexer: Indexer,
+    indexer: RemoteIndexer,
 }
 
 impl RustPlay<(), ()> {
@@ -245,7 +247,7 @@ impl RustPlay<(), ()> {
             state: State::default(),
             no_term: settings.args.no_term,
             shell: Shell::new(),
-            indexer: Indexer::new()?,
+            indexer: RemoteIndexer::new()?,
         })
     }
 
@@ -257,12 +259,12 @@ impl RustPlay<(), ()> {
             .flush()
     }
 
-    fn restore_term() -> io::Result<()> {
-        disable_raw_mode()?;
+    pub fn restore_term() -> io::Result<()> {
         stdout()
             .queue(LeaveAlternateScreen)?
             .queue(cursor::Show)?
-            .flush()
+            .flush()?;
+        disable_raw_mode()
     }
 }
 
@@ -303,7 +305,7 @@ where
         if self.state.select_mode {
             out.queue(Clear(ClearType::All))?;
             out.queue(cursor::MoveTo(0, 0))?;
-            for (i, val) in self.indexer.result.iter().enumerate() {
+            for (i, val) in self.state.result.iter().enumerate() {
                 out.queue(if i == self.state.selected {
                     cursor_bg
                 } else {
@@ -321,7 +323,7 @@ where
             } else {
                 (1, 9)
             };
-            let use_color = false;
+            let use_color = true;
             if let Some(Value::Data(data)) = self.state.meta.get("fft") {
                 if self.data.len() != data.len() {
                     self.data.resize(data.len(), 0.0);
@@ -387,7 +389,7 @@ where
     }
 
     fn search(&mut self) {
-        self.indexer.search(&self.shell.command()).unwrap();
+        self.state.result = self.indexer.search(&self.shell.command()).unwrap();
         self.shell.clear();
         self.state.select_mode = true;
         self.state.selected = 0;
@@ -416,13 +418,13 @@ where
                             }
                         }
                         KeyCode::Down => {
-                            if self.state.selected < self.indexer.result.len() - 1 {
+                            if self.state.selected < self.state.result.len() - 1 {
                                 self.state.selected += 1;
                             }
                         }
                         KeyCode::Left => self.send_cmd(Player::prev_song),
                         KeyCode::Enter => {
-                            let path = self.indexer.result[self.state.selected].clone();
+                            let path = self.state.result[self.state.selected].clone();
                             self.song_queue.push_front(path.into());
                             self.next();
                             self.state.select_mode = false
@@ -451,6 +453,8 @@ where
         self.state.clear_meta();
         if let Some(s) = self.song_queue.pop_front() {
             self.send_cmd(move |p| p.load(&s));
+        } else if let Some(s) = self.indexer.next() {
+            self.send_cmd(move |p| p.load(s.path()));
             if let Some(next) = self.song_queue.front() {
                 self.state
                     .meta
@@ -467,23 +471,8 @@ where
         self.state.update_meta(&mut self.info_consumer);
     }
 
-    fn add_song_(&mut self, song: &Path) -> Result<(), io::Error> {
-        if song.is_dir() {
-            for p in fs::read_dir(song)? {
-                self.add_song_(&p?.path())?;
-            }
-        } else {
-            if let Some(info) = musix::identify_song(song) {
-                self.indexer.add(song, &info);
-            }
-
-            self.song_queue.push_back(song.to_owned());
-        }
-        Ok(())
-    }
     pub fn add_song(&mut self, song: &Path) -> Result<(), io::Error> {
-        self.add_song_(song)?;
-        self.indexer.commit();
+        self.indexer.add_path(song);
         Ok(())
     }
 

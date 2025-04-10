@@ -1,7 +1,5 @@
-use core::fmt;
 use std::{
     error::Error,
-    fmt::Display,
     io::{self, Read},
     path::{Path, PathBuf},
     sync::{
@@ -22,56 +20,7 @@ use spectrum_analyzer::{
 
 use musix::{ChipPlayer, MusicError};
 
-use crate::Args;
-
-pub(crate) enum Value {
-    Text(String),
-    Number(i32),
-    Data(Vec<u8>),
-    Error(MusicError),
-}
-
-impl Display for Value {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Value::Text(s) => f.write_str(s.as_str())?,
-            Value::Number(n) => write!(f, "{n:02}")?,
-            Value::Error(e) => write!(f, "{e}")?,
-            Value::Data(_) => write!(f, "Data")?,
-        }
-        Ok(())
-    }
-}
-
-impl From<i32> for Value {
-    fn from(item: i32) -> Self {
-        Value::Number(item)
-    }
-}
-
-impl From<String> for Value {
-    fn from(item: String) -> Self {
-        Value::Text(item)
-    }
-}
-
-impl From<&str> for Value {
-    fn from(item: &str) -> Self {
-        Value::Text(item.to_owned())
-    }
-}
-
-impl From<Vec<u8>> for Value {
-    fn from(item: Vec<u8>) -> Self {
-        Value::Data(item)
-    }
-}
-
-impl From<MusicError> for Value {
-    fn from(item: MusicError) -> Self {
-        Value::Error(item)
-    }
-}
+use crate::{Args, value::Value};
 
 pub(crate) type PlayResult = Result<bool, MusicError>;
 

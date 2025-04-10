@@ -237,7 +237,7 @@ impl Template {
 mod tests {
     use std::collections::HashMap;
 
-    use crate::player::Value;
+    use crate::value::Value;
 
     use super::Template;
 

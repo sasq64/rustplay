@@ -3,13 +3,16 @@
 use std::{
     cell::RefCell,
     error::Error,
+    panic,
     path::{Path, PathBuf},
+    process,
     rc::Rc,
 };
 
 mod player;
 mod rustplay;
 mod templ;
+mod value;
 
 use rustplay::RustPlay;
 
@@ -66,6 +69,7 @@ struct Settings {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let orig_hook = panic::take_hook();
     // Settings is passed to RHAI and needs static lifetime => Rc
     // Needs to be modified by RHAI => RefCell (could be Cell)
     let settings = Rc::new(RefCell::new(Settings {
@@ -91,6 +95,15 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let mut rust_play = RustPlay::new(settings.borrow().clone())?;
 
+    panic::set_hook(Box::new(move |panic_info| {
+        RustPlay::restore_term().unwrap();
+        println!("panic occurred: {panic_info}");
+        // invoke the default handler and exit the process
+        orig_hook(panic_info);
+        RustPlay::restore_term().unwrap();
+        process::exit(1);
+    }));
+
     if settings.borrow().args.songs.is_empty() {
         settings
             .borrow_mut()
@@ -110,6 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         rust_play.update_meta();
         rust_play.draw_screen()?;
+        std::thread::sleep_ms(10);
     }
 
     rust_play.quit()?;

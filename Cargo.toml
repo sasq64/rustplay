@@ -8,6 +8,7 @@ edition = "2024"
 debug = 1
 
 [dependencies]
+walkdir = "2"
 crossterm = "0.27.0"
 musix = { path = "../musicplayer/" }
 cpal = "0.15.3"
