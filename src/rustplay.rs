@@ -5,14 +5,14 @@ use std::io::Write as _;
 use std::io::{self, stdout};
 use std::panic;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
 use std::{error::Error, path::Path, thread::JoinHandle};
 
 use crossterm::cursor::MoveToNextLine;
 use crossterm::style::SetBackgroundColor;
 use musix::MusicError;
-use ringbuf::{HeapRb, StaticRb, traits::*};
+use ringbuf::{HeapRb, traits::*};
 
 use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
@@ -49,11 +49,8 @@ struct State {
 }
 
 impl State {
-    pub fn update_meta<IC>(&mut self, info_consumer: &mut IC)
-    where
-        IC: Consumer<Item = Info>,
-    {
-        while let Some((meta, val)) = info_consumer.try_pop() {
+    pub fn update_meta(&mut self, info_consumer: &mut mpsc::Receiver<Info>) {
+        while let Ok((meta, val)) = info_consumer.try_recv() {
             if meta != "fft" {
                 //    println!("{} = {}", meta, val);
             }
@@ -190,9 +187,9 @@ impl Shell {
     }
 }
 
-pub(crate) struct RustPlay<CP, IC> {
+pub(crate) struct RustPlay<CP> {
     cmd_producer: CP,
-    info_consumer: IC,
+    info_consumer: mpsc::Receiver<(String, Value)>,
     templ: Template,
     msec: Arc<AtomicUsize>,
     data: Vec<f32>,
@@ -207,16 +204,14 @@ pub(crate) struct RustPlay<CP, IC> {
     indexer: RemoteIndexer,
 }
 
-impl RustPlay<(), ()> {
-    pub fn new(
-        settings: Settings,
-    ) -> Result<RustPlay<impl Producer<Item = Cmd>, impl Consumer<Item = Info>>, Box<dyn Error>>
-    {
+impl RustPlay<()> {
+    pub fn new(settings: Settings) -> Result<RustPlay<impl Producer<Item = Cmd>>, Box<dyn Error>> {
         // Send commands to player
         let (cmd_producer, cmd_consumer) = HeapRb::<Cmd>::new(5).split();
 
         // Receive info from player
-        let (info_producer, info_consumer) = StaticRb::<Info, 64>::default().split();
+        //let (info_producer, info_consumer) = StaticRb::<Info, 64>::default().split();
+        let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
 
         if !settings.args.no_term {
@@ -268,10 +263,9 @@ impl RustPlay<(), ()> {
     }
 }
 
-impl<CP, IC> RustPlay<CP, IC>
+impl<CP> RustPlay<CP>
 where
     CP: Producer<Item = Cmd>,
-    IC: Consumer<Item = Info>,
 {
     pub fn draw_screen(&mut self) -> io::Result<()> {
         if self.no_term {

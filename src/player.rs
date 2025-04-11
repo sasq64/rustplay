@@ -5,6 +5,7 @@ use std::{
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
+        mpsc,
     },
     thread::{self, JoinHandle},
 };
@@ -93,15 +94,9 @@ trait PushValue {
     fn push_value<V: Into<Value>>(&mut self, name: &str, val: V) -> PlayResult;
 }
 
-impl<T> PushValue for T
-where
-    T: Producer<Item = Info>,
-{
-    fn push_value<V: Into<Value>>(&mut self, name: &str, val: V) -> PlayResult
-    where
-        Self: Producer<Item = Info>,
-    {
-        self.try_push((name.to_owned(), val.into()))
+impl PushValue for mpsc::Sender<Info> {
+    fn push_value<V: Into<Value>>(&mut self, name: &str, val: V) -> PlayResult {
+        self.send((name.to_owned(), val.into()))
             .map_err(|_| MusicError {
                 msg: "Could not push".to_owned(),
             })?;
@@ -109,14 +104,13 @@ where
     }
 }
 
-pub(crate) fn run_player<P, C>(
+pub(crate) fn run_player<C>(
     args: &Args,
-    mut info_producer: P,
+    mut info_producer: mpsc::Sender<Info>,
     mut cmd_consumer: C,
     msec: Arc<AtomicUsize>,
 ) -> Result<JoinHandle<()>, MusicError>
 where
-    P: Producer<Item = Info> + Send + 'static,
     C: Consumer<Item = Cmd> + Send + 'static,
 {
     musix::init(Path::new("data"))?;
