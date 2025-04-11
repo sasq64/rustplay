@@ -5,7 +5,7 @@ authors = ["Jonas Minnberg <sasq64@gmail.com>"]
 edition = "2024"
 
 [profile.release]
-debug = 1
+desbug = 1
 
 [dependencies]
 walkdir = "2"
@@ -13,15 +13,13 @@ crossterm = "0.27.0"
 musix = { path = "../musicplayer/" }
 cpal = "0.15.3"
 ringbuf = "0.4.1"
-strfmt = "0.2.4"
 spectrum-analyzer = "1.5.0"
 clap = { version = "4.5.4", features = ["derive"] }
-rubato = "0.15.0"
 itertools = "0.13.0"
-speexdsp-resampler = "0.1.0"
 regex = "1.10.4"
 rhai = "1.18.0"
 id3 = "1.13.1"
 mp3-duration = "0.1.10"
 tantivy = "0.22.0"
+anyhow = "1.0"
 

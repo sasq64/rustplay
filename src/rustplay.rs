@@ -12,7 +12,6 @@ use std::{error::Error, path::Path, thread::JoinHandle};
 use crossterm::cursor::MoveToNextLine;
 use crossterm::style::SetBackgroundColor;
 use musix::MusicError;
-use ringbuf::{HeapRb, traits::*};
 
 use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
@@ -187,8 +186,8 @@ impl Shell {
     }
 }
 
-pub(crate) struct RustPlay<CP> {
-    cmd_producer: CP,
+pub(crate) struct RustPlay {
+    cmd_producer: mpsc::Sender<Cmd>,
     info_consumer: mpsc::Receiver<(String, Value)>,
     templ: Template,
     msec: Arc<AtomicUsize>,
@@ -204,10 +203,10 @@ pub(crate) struct RustPlay<CP> {
     indexer: RemoteIndexer,
 }
 
-impl RustPlay<()> {
-    pub fn new(settings: Settings) -> Result<RustPlay<impl Producer<Item = Cmd>>, Box<dyn Error>> {
+impl RustPlay {
+    pub fn new(settings: Settings) -> Result<RustPlay, Box<dyn Error>> {
         // Send commands to player
-        let (cmd_producer, cmd_consumer) = HeapRb::<Cmd>::new(5).split();
+        let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 
         // Receive info from player
         //let (info_producer, info_consumer) = StaticRb::<Info, 64>::default().split();
@@ -261,12 +260,7 @@ impl RustPlay<()> {
             .flush()?;
         disable_raw_mode()
     }
-}
 
-impl<CP> RustPlay<CP>
-where
-    CP: Producer<Item = Cmd>,
-{
     pub fn draw_screen(&mut self) -> io::Result<()> {
         if self.no_term {
             return Ok(());
@@ -377,7 +371,7 @@ where
     }
 
     fn send_cmd(&mut self, f: impl FnOnce(&mut Player) -> PlayResult + Send + 'static) {
-        if self.cmd_producer.try_push(Box::new(f)).is_err() {
+        if self.cmd_producer.send(Box::new(f)).is_err() {
             panic!("");
         }
     }
@@ -474,11 +468,7 @@ where
         if !self.no_term {
             RustPlay::restore_term()?;
         }
-        if self
-            .cmd_producer
-            .try_push(Box::new(move |p| p.quit()))
-            .is_err()
-        {
+        if self.cmd_producer.send(Box::new(move |p| p.quit())).is_err() {
             return Err(Box::new(MusicError {
                 msg: "Quit failed".into(),
             }));

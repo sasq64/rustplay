@@ -104,15 +104,12 @@ impl PushValue for mpsc::Sender<Info> {
     }
 }
 
-pub(crate) fn run_player<C>(
+pub(crate) fn run_player(
     args: &Args,
     mut info_producer: mpsc::Sender<Info>,
-    mut cmd_consumer: C,
+    cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
-) -> Result<JoinHandle<()>, MusicError>
-where
-    C: Consumer<Item = Cmd> + Send + 'static,
-{
+) -> Result<JoinHandle<()>, MusicError> {
     musix::init(Path::new("data"))?;
 
     let device = cpal::default_host()
@@ -174,7 +171,7 @@ where
                 if player.quitting {
                     break;
                 }
-                while let Some(f) = cmd_consumer.try_pop() {
+                while let Ok(f) = cmd_consumer.try_recv() {
                     if let Err(e) = f(&mut player) {
                         info_producer.push_value("error", e)?;
                     }
@@ -266,11 +263,11 @@ where
 #[cfg(test)]
 mod tests {
     use core::time;
+    use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::mpsc;
     use std::thread;
-
-    use ringbuf::{HeapRb, StaticRb, traits::*};
 
     use crate::Args;
 
@@ -279,21 +276,32 @@ mod tests {
 
     #[test]
     #[allow(clippy::unwrap_used)]
+    fn musix_works() {
+        musix::init(Path::new("data")).unwrap();
+        let mut chip_player = musix::load_song(Path::new("Chimera.sid")).unwrap();
+        let mut target = vec![0; 1024];
+        let rc = chip_player.get_samples(&mut target);
+        assert_eq!(rc, 1024);
+        let mut target = vec![0; 8192];
+        let rc = chip_player.get_samples(&mut target);
+        assert_eq!(rc, 8192);
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
     fn player_starts() {
         // Send commands to player
-        let (mut cmd_producer, cmd_consumer) = HeapRb::<Cmd>::new(5).split();
+        let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 
         // Receive info from player
-        let (info_producer, _) = StaticRb::<Info, 64>::default().split();
+        let (info_producer, _) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
-        let args = Args {
-            ..Default::default()
-        };
+        let args = Args { ..Args::default() };
         let player_thread =
             crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
 
         cmd_producer
-            .try_push(Box::new(move |p| p.quit()))
+            .send(Box::new(move |p| p.quit()))
             .unwrap_or_else(|_| panic!("Could not push to cmd_producer"));
         thread::sleep(time::Duration::from_millis(500));
         if player_thread.is_finished() {
