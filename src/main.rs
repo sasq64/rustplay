@@ -7,6 +7,7 @@ use std::{
     path::{Path, PathBuf},
     process,
     rc::Rc,
+    time::Duration,
 };
 
 mod player;
@@ -74,7 +75,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Needs to be modified by RHAI => RefCell (could be Cell)
     let settings = Rc::new(RefCell::new(Settings {
         args: Args::parse(),
-        template: "".to_owned(),
+        template: String::new(),
         width: -1,
     }));
 
@@ -82,7 +83,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     rhai_engine.register_fn("template", {
         let settings = settings.clone();
-        move |t: &str| settings.borrow_mut().template = t.to_owned()
+        move |t: &str| t.clone_into(&mut settings.borrow_mut().template)
     });
 
     let p = Path::new("init.rhai");
@@ -96,11 +97,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut rust_play = RustPlay::new(settings.borrow().clone())?;
 
     panic::set_hook(Box::new(move |panic_info| {
-        RustPlay::restore_term().unwrap();
+        RustPlay::restore_term().expect("Could not restore terminal");
         println!("panic occurred: {panic_info}");
         // invoke the default handler and exit the process
         orig_hook(panic_info);
-        RustPlay::restore_term().unwrap();
         process::exit(1);
     }));
 
@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
         rust_play.update_meta();
         rust_play.draw_screen()?;
-        std::thread::sleep_ms(10);
+        std::thread::sleep(Duration::from_millis(10));
     }
 
     rust_play.quit()?;

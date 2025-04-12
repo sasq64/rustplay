@@ -1,3 +1,4 @@
+#![allow(clippy::unwrap_used)]
 use crossterm::style::{Color, SetForegroundColor};
 use regex::Regex;
 use std::borrow::Borrow;
@@ -96,6 +97,17 @@ impl Template {
                     .queue(SetForegroundColor(color(ph.color)))?
                     .queue(Print(&text[..l]))?;
             }
+        }
+        Ok(())
+    }
+
+    pub fn write_field(&self, x: u16, y: u16, key: &str, text: &str) -> io::Result<()> {
+        if let Some(ph) = self.data.get(key) {
+            let l = usize::min(text.len(), ph.len);
+            stdout()
+                .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
+                .queue(SetForegroundColor(color(ph.color)))?
+                .queue(Print(&text[..l]))?;
         }
         Ok(())
     }

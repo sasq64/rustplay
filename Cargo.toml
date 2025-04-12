@@ -5,7 +5,7 @@ authors = ["Jonas Minnberg <sasq64@gmail.com>"]
 edition = "2024"
 
 [profile.release]
-desbug = 1
+debug = 1
 
 [dependencies]
 walkdir = "2"

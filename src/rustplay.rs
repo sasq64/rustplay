@@ -7,8 +7,9 @@ use std::panic;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
-use std::{error::Error, path::Path, thread::JoinHandle};
+use std::{path::Path, thread::JoinHandle};
 
+use anyhow::Result;
 use crossterm::cursor::MoveToNextLine;
 use crossterm::style::SetBackgroundColor;
 use musix::MusicError;
@@ -204,7 +205,7 @@ pub(crate) struct RustPlay {
 }
 
 impl RustPlay {
-    pub fn new(settings: Settings) -> Result<RustPlay, Box<dyn Error>> {
+    pub fn new(settings: Settings) -> Result<RustPlay> {
         // Send commands to player
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 
@@ -265,6 +266,8 @@ impl RustPlay {
         if self.no_term {
             return Ok(());
         }
+        let black_bg = SetBackgroundColor(Color::Rgb { r: 0, g: 0, b: 0 });
+        stdout().queue(black_bg)?.flush()?;
         if self.state.changed {
             self.state.changed = false;
             stdout()
@@ -273,7 +276,7 @@ impl RustPlay {
             self.templ.write(&self.state.meta, 0, 0)?;
         }
 
-        let black_bg = SetBackgroundColor(Color::Reset);
+        //let black_bg = SetBackgroundColor(Color::Reset);
         let cursor_bg = SetBackgroundColor(Color::White);
         let mut out = stdout();
 
@@ -290,6 +293,7 @@ impl RustPlay {
             .queue(Print(last))?
             .queue(black_bg)?
             .queue(Print(" "))?;
+
         if self.state.select_mode {
             out.queue(Clear(ClearType::All))?;
             out.queue(cursor::MoveTo(0, 0))?;
@@ -303,6 +307,12 @@ impl RustPlay {
                 .queue(MoveToNextLine(1))?;
             }
             return out.flush();
+        }
+
+        if let Some((x, y)) = self.templ.get_pos("count") {
+            out.queue(cursor::MoveTo(x, y))?
+                .queue(Print(format!("{}", self.indexer.index_count())))?
+                .flush()?;
         }
 
         if self.fft_pos != VisualizerPos::None {
@@ -357,15 +367,12 @@ impl RustPlay {
             self.state.show_error = 50;
         }
 
-        if let Some((x, y)) = self.templ.get_pos("time") {
-            let play_time = self.msec.load(Ordering::SeqCst);
-            let c = (play_time / 10) % 100;
-            let m = play_time / 60000;
-            let s = (play_time / 1000) % 60;
-            out.queue(cursor::MoveTo(x, y))?
-                .queue(SetForegroundColor(Color::Yellow))?
-                .queue(Print(format!("{m:02}:{s:02}:{c:02}")))?;
-        }
+        let play_time = self.msec.load(Ordering::SeqCst);
+        let c = (play_time / 10) % 100;
+        let m = play_time / 60000;
+        let s = (play_time / 1000) % 60;
+        self.templ
+            .write_field(0, 0, "time", &format!("{m:02}:{s:02}:{c:02}"))?;
         out.flush()?;
         Ok(())
     }
@@ -376,14 +383,15 @@ impl RustPlay {
         }
     }
 
-    fn search(&mut self) {
-        self.state.result = self.indexer.search(&self.shell.command()).unwrap();
+    fn search(&mut self) -> Result<()> {
+        self.state.result = self.indexer.search(&self.shell.command())?;
         self.shell.clear();
         self.state.select_mode = true;
         self.state.selected = 0;
+        Ok(())
     }
 
-    pub fn handle_keys(&mut self) -> Result<bool, io::Error> {
+    pub fn handle_keys(&mut self) -> Result<bool> {
         if self.no_term {
             return Ok(false);
         }
@@ -397,7 +405,11 @@ impl RustPlay {
 
                 if self.state.select_mode {
                     match key.code {
-                        KeyCode::Esc => self.state.select_mode = false,
+                        KeyCode::Esc => {
+                            self.state.select_mode = false;
+                            self.state.changed = true;
+                        }
+
                         KeyCode::Char('c') if ctrl => return Ok(true),
                         KeyCode::Char('n') if ctrl => self.next(),
                         KeyCode::Up => {
@@ -406,29 +418,35 @@ impl RustPlay {
                             }
                         }
                         KeyCode::Down => {
-                            if self.state.selected < self.state.result.len() - 1 {
+                            if self.state.selected + 1 < self.state.result.len() {
                                 self.state.selected += 1;
                             }
                         }
                         KeyCode::Left => self.send_cmd(Player::prev_song),
                         KeyCode::Enter => {
-                            let path = self.state.result[self.state.selected].clone();
-                            self.song_queue.push_front(path.into());
-                            self.next();
-                            self.state.select_mode = false
+                            if !self.state.result.is_empty() {
+                                let path = self.state.result[self.state.selected].clone();
+                                self.song_queue.push_front(path.into());
+                                self.next();
+                            }
+                            self.state.changed = true;
+                            self.state.select_mode = false;
                         }
                         _ => {}
                     }
                 } else {
                     match key.code {
                         KeyCode::Esc => return Ok(true),
+                        KeyCode::Up | KeyCode::Down => {
+                            self.state.select_mode = true;
+                        }
                         KeyCode::Char('c') if ctrl => return Ok(true),
                         KeyCode::Char('n') if ctrl => self.next(),
                         KeyCode::Right => self.send_cmd(Player::next_song),
                         KeyCode::Left => self.send_cmd(Player::prev_song),
                         KeyCode::Backspace => self.shell.del(),
                         KeyCode::Char(x) => self.shell.insert(x),
-                        KeyCode::Enter => self.search(),
+                        KeyCode::Enter => self.search()?,
                         _ => {}
                     }
                 }
@@ -464,18 +482,21 @@ impl RustPlay {
         Ok(())
     }
 
-    pub fn quit(&mut self) -> Result<(), Box<dyn Error>> {
+    pub fn quit(&mut self) -> Result<()> {
         if !self.no_term {
             RustPlay::restore_term()?;
         }
         if self.cmd_producer.send(Box::new(move |p| p.quit())).is_err() {
-            return Err(Box::new(MusicError {
+            return Err(MusicError {
                 msg: "Quit failed".into(),
-            }));
+            }
+            .into());
         }
 
-        if let Err(err) = self.player_thread.take().unwrap().join() {
-            panic::resume_unwind(err);
+        if let Some(t) = self.player_thread.take() {
+            if let Err(err) = t.join() {
+                panic::resume_unwind(err);
+            }
         }
         Ok(())
     }
@@ -505,7 +526,7 @@ mod tests {
         let settings = Settings {
             args: Args {
                 no_term: true,
-                ..Default::default()
+                ..Args::default()
             },
             template: "".into(),
             width: 10,

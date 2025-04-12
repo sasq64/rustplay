@@ -1,5 +1,4 @@
 use std::{
-    error::Error,
     io::{self, Read},
     path::{Path, PathBuf},
     sync::{
@@ -8,6 +7,7 @@ use std::{
         mpsc,
     },
     thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use cpal::{SampleFormat, SampleRate, traits::*};
@@ -19,9 +19,10 @@ use spectrum_analyzer::{
     FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10, windows::hann_window,
 };
 
-use musix::{ChipPlayer, MusicError};
-
 use crate::{Args, value::Value};
+use anyhow::Context;
+use anyhow::Result;
+use musix::{ChipPlayer, MusicError};
 
 pub(crate) type PlayResult = Result<bool, MusicError>;
 
@@ -88,6 +89,54 @@ impl Player {
         self.quitting = true;
         Ok(true)
     }
+
+    pub fn update_meta(&mut self, info_producer: &mut mpsc::Sender<Info>) -> Result<()> {
+        if let Some(new_song) = self.new_song.take() {
+            //println!("New song {}", new_song.to_str().unwrap());
+            info_producer.push_value("new", 0)?;
+            if let Some(ext) = new_song.extension() {
+                if ext == "mp3" {
+                    if let Ok(duration) = mp3_duration::from_path(&new_song) {
+                        let secs = duration.as_secs() as i32;
+                        info_producer.push_value("length", secs)?;
+                    }
+                    let tag = Tag::read_from_path(new_song)?;
+                    if let Some(album) = tag.album() {
+                        info_producer.push_value("album", album)?;
+                    }
+                    if let Some(artist) = tag.artist() {
+                        info_producer.push_value("composer", artist)?;
+                    }
+                    if let Some(title) = tag.title() {
+                        info_producer.push_value("title", title)?;
+                    }
+                }
+            }
+        }
+        if let Some(chip_player) = &mut self.chip_player {
+            while let Some(meta) = chip_player.get_changed_meta() {
+                let val = chip_player.get_meta_string(&meta).unwrap_or("".into());
+                let v: Value = match meta.as_str() {
+                    "song" | "startSong" => {
+                        self.song = val.parse::<i32>()?;
+                        self.song.into()
+                    }
+                    "songs" => {
+                        let n = val.parse::<i32>()?;
+                        self.songs = n;
+                        n.into()
+                    }
+                    "length" => {
+                        let length = val.parse::<i32>()?;
+                        length.into()
+                    }
+                    &_ => Value::Text(val),
+                };
+                info_producer.push_value(&meta, v)?;
+            }
+        }
+        Ok(())
+    }
 }
 
 trait PushValue {
@@ -104,23 +153,23 @@ impl PushValue for mpsc::Sender<Info> {
     }
 }
 
+fn check_mp3() {}
+
 pub(crate) fn run_player(
     args: &Args,
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
-) -> Result<JoinHandle<()>, MusicError> {
+) -> Result<JoinHandle<()>> {
     musix::init(Path::new("data"))?;
 
     let device = cpal::default_host()
         .default_output_device()
-        .ok_or_else(|| MusicError {
-            msg: "No audio device available".into(),
-        })?;
+        .context("No audio device available")?;
 
-    let mut configs = device.supported_output_configs().map_err(|e| MusicError {
-        msg: format!("Could not get audio configs: {e}"),
-    })?;
+    let mut configs = device
+        .supported_output_configs()
+        .context("Could not get audio configs")?;
     let buffer_size = 4096 / 2;
 
     let sconf = configs
@@ -130,9 +179,7 @@ pub(crate) fn run_player(
                 && conf.max_sample_rate() >= cpal::SampleRate(44100)
                 && conf.min_sample_rate() <= cpal::SampleRate(44100)
         })
-        .ok_or_else(|| MusicError {
-            msg: "Could not find a compatible audio config".into(),
-        })?;
+        .context("Could not find a compatible audio config")?;
     let config = sconf.with_sample_rate(SampleRate(44100));
 
     let min_freq = args.min_freq as f32;
@@ -142,7 +189,7 @@ pub(crate) fn run_player(
     let msec_outside = msec.clone();
 
     Ok(thread::spawn(move || {
-        let main = move || -> Result<(), Box<dyn Error>> {
+        let main = move || -> Result<()> {
             let ring = StaticRb::<f32, 8192>::default();
             let (mut audio_sink, mut audio_faucet) = ring.split();
 
@@ -162,67 +209,23 @@ pub(crate) fn run_player(
 
             let mut player = Player {
                 millis: msec_outside,
-                ..Default::default()
+                ..Player::default()
             };
 
             info_producer.push_value("done", 0)?;
 
-            loop {
-                if player.quitting {
-                    break;
-                }
-                while let Ok(f) = cmd_consumer.try_recv() {
-                    if let Err(e) = f(&mut player) {
+            while !player.quitting {
+                while let Ok(cmd_fn) = cmd_consumer.try_recv() {
+                    if let Err(e) = cmd_fn(&mut player) {
                         info_producer.push_value("error", e)?;
                     }
                 }
 
-                if let Some(cp) = &mut player.chip_player {
-                    if let Some(new_song) = player.new_song.take() {
-                        //println!("New song {}", new_song.to_str().unwrap());
-                        info_producer.push_value("new", 0)?;
-                        if let Some(ext) = new_song.extension() {
-                            if ext == "mp3" {
-                                if let Ok(duration) = mp3_duration::from_path(&new_song) {
-                                    let secs = duration.as_secs() as i32;
-                                    info_producer.push_value("length", secs)?;
-                                }
-                                let tag = Tag::read_from_path(new_song)?;
-                                if let Some(album) = tag.album() {
-                                    info_producer.push_value("album", album)?;
-                                }
-                                if let Some(artist) = tag.artist() {
-                                    info_producer.push_value("composer", artist)?;
-                                }
-                                if let Some(title) = tag.title() {
-                                    info_producer.push_value("title", title)?;
-                                }
-                            }
-                        }
-                    }
+                player.update_meta(&mut info_producer)?;
 
-                    while let Some(meta) = cp.get_changed_meta() {
-                        let val = cp.get_meta_string(&meta).unwrap_or("".into());
-                        let v: Value = match meta.as_str() {
-                            "song" | "startSong" => {
-                                player.song = val.parse::<i32>()?;
-                                player.song.into()
-                            }
-                            "songs" => {
-                                let n = val.parse::<i32>()?;
-                                player.songs = n;
-                                n.into()
-                            }
-                            "length" => {
-                                let length = val.parse::<i32>()?;
-                                length.into()
-                            }
-                            &_ => Value::Text(val),
-                        };
-                        info_producer.push_value(&meta, v)?;
-                    }
+                if let Some(chip_player) = &mut player.chip_player {
                     if audio_sink.vacant_len() > target.len() {
-                        let rc = cp.get_samples(&mut target);
+                        let rc = chip_player.get_samples(&mut target);
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
                         }
@@ -249,17 +252,18 @@ pub(crate) fn run_player(
                             .collect();
                         info_producer.push_value("fft", data)?;
                     } else {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                        std::thread::sleep(Duration::from_millis(10));
                     }
                 } else {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    std::thread::sleep(Duration::from_millis(100));
                 }
             }
             Ok(())
         };
-        main().expect("");
+        main().expect("Fail");
     }))
 }
+
 #[cfg(test)]
 mod tests {
     use core::time;
@@ -277,7 +281,9 @@ mod tests {
     #[test]
     #[allow(clippy::unwrap_used)]
     fn musix_works() {
-        musix::init(Path::new("data")).unwrap();
+        let data = Path::new("data");
+        assert!(data.is_dir());
+        musix::init(data).unwrap();
         let mut chip_player = musix::load_song(Path::new("Chimera.sid")).unwrap();
         let mut target = vec![0; 1024];
         let rc = chip_player.get_samples(&mut target);
@@ -294,7 +300,7 @@ mod tests {
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 
         // Receive info from player
-        let (info_producer, _) = mpsc::channel::<Info>();
+        let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
         let player_thread =
@@ -304,6 +310,7 @@ mod tests {
             .send(Box::new(move |p| p.quit()))
             .unwrap_or_else(|_| panic!("Could not push to cmd_producer"));
         thread::sleep(time::Duration::from_millis(500));
+        let _ = info_consumer.recv().unwrap();
         if player_thread.is_finished() {
             player_thread.join().unwrap();
         } else {
