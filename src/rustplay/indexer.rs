@@ -101,6 +101,20 @@ impl Indexer {
     }
 
     pub fn add_path(&mut self, song_path: &Path) -> Result<()> {
+        let segments = song_path
+            .ancestors()
+            .filter_map(|a| a.file_name())
+            .filter_map(|a| a.to_str())
+            .collect::<Vec<_>>();
+        let l = segments.len();
+        if l >= 3 && segments[2].contains("racker") {
+            let info = SongInfo {
+                title: song_path.file_stem().unwrap().to_str().unwrap().to_owned(),
+                composer: segments[1].to_owned(),
+                ..SongInfo::default()
+            };
+            return self.add_with_info(song_path, &info);
+        }
         self.count.fetch_add(1, Ordering::Relaxed);
         self.index_writer.add_document(doc!(
                 self.file_field => song_path.file_name().context("No filename")?.to_str().unwrap(),
@@ -298,6 +312,13 @@ mod tests {
         indexer.commit().unwrap();
         indexer.search("pandora").unwrap();
         assert!(indexer.result.len() == 1);
+
+        let path: PathBuf =
+            "/home/sasq/Music/MODLAND/Fasttracker 2/Purple Motion/sil forever.xm".into();
+        indexer.add_path(&path).unwrap();
+        indexer.commit().unwrap();
+        indexer.search("purple motion").unwrap();
+        assert_eq!(indexer.result.len(), 1);
 
         let path: PathBuf = "../musicplayer/music/C64".into();
         for entry in WalkDir::new(path) {

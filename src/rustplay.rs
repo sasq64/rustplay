@@ -210,7 +210,6 @@ impl RustPlay {
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 
         // Receive info from player
-        //let (info_producer, info_consumer) = StaticRb::<Info, 64>::default().split();
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
 
