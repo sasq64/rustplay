@@ -12,6 +12,6 @@ template(`
 @format=f
 @count=:#808080
 @sub_title=:#a0a0a0
-@title_and_composer=:#000000
+@title_and_composer=:#ffffff
 @TEXT=:#20e020
 `)
