@@ -44,8 +44,10 @@ struct State {
     show_error: i32,
     select_mode: bool,
     selected: usize,
+    start_pos: usize,
+    quit: bool,
     errors: VecDeque<String>,
-    result: Vec<String>,
+    //result: Vec<String>,
 }
 
 impl State {
@@ -79,7 +81,7 @@ impl State {
                 Value::Error(ref e) => {
                     self.errors.push_back((*e).to_string());
                 }
-                Value::Data(_) => {}
+                Value::Data(_) | Value::Unknown() => {}
             }
             self.meta.insert(meta, val);
         }
@@ -261,7 +263,7 @@ impl RustPlay {
         disable_raw_mode()
     }
 
-    pub fn draw_screen(&mut self) -> io::Result<()> {
+    pub fn draw_screen(&mut self) -> Result<()> {
         if self.no_term {
             return Ok(());
         }
@@ -281,31 +283,35 @@ impl RustPlay {
 
         let (first, cursor, last) = self.shell.command_line();
 
-        out.queue(black_bg)?
+        out.queue(cursor::MoveTo(0, self.templ.height() as u16 + 1))?
+            .queue(Clear(ClearType::UntilNewLine))?
+            .queue(black_bg)?
             .queue(SetForegroundColor(Color::Red))?
-            .queue(cursor::MoveTo(0, self.templ.height() as u16 + 1))?
             .queue(Print("> "))?
             .queue(Print(first))?
             .queue(cursor_bg)?
             .queue(Print(cursor))?
             .queue(black_bg)?
-            .queue(Print(last))?
-            .queue(black_bg)?
-            .queue(Print(" "))?;
+            .queue(Print(last))?;
 
         if self.state.select_mode {
+            let height = 20;
             out.queue(Clear(ClearType::All))?;
             out.queue(cursor::MoveTo(0, 0))?;
-            for (i, val) in self.state.result.iter().enumerate() {
-                out.queue(if i == self.state.selected {
+            let start = self.state.start_pos;
+            let songs = self.indexer.get_songs(start, start + height)?;
+            for (i, song) in songs.into_iter().enumerate() {
+                //for (i, val) in self.state.result.iter().enumerate() {
+                out.queue(if i == self.state.selected - start {
                     cursor_bg
                 } else {
                     black_bg
                 })?
-                .queue(Print(val))?
+                .queue(Print(song.title_and_composer()))?
                 .queue(MoveToNextLine(1))?;
             }
-            return out.flush();
+            out.flush()?;
+            return Ok(());
         }
 
         if let Some((x, y)) = self.templ.get_pos("count") {
@@ -383,10 +389,95 @@ impl RustPlay {
     }
 
     fn search(&mut self) -> Result<()> {
-        self.state.result = self.indexer.search(&self.shell.command())?;
+        self.indexer.search(&self.shell.command())?;
         self.shell.clear();
         self.state.select_mode = true;
         self.state.selected = 0;
+        self.state.start_pos = 0;
+        Ok(())
+    }
+
+    fn set_song(&mut self, song: u32) {
+        self.send_cmd(move |p| p.set_song(song as i32));
+    }
+
+    fn handle_player_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Char(d) if d.is_ascii_digit() && ctrl => {
+                self.set_song(d.to_digit(10).unwrap())
+            }
+            KeyCode::Up | KeyCode::Down => {
+                self.state.select_mode = true;
+                self.handle_select_key(key)?;
+            }
+            KeyCode::Char('c') if ctrl => self.state.quit = true,
+            KeyCode::Char('n') if ctrl => self.next(),
+            KeyCode::Right => self.send_cmd(Player::next_song),
+            KeyCode::Left => self.send_cmd(Player::prev_song),
+            KeyCode::Backspace => self.shell.del(),
+            KeyCode::Char(x) => self.shell.insert(x),
+            KeyCode::Esc => self.shell.clear(),
+            KeyCode::Enter => self.search()?,
+            _ => {}
+        };
+        Ok(())
+    }
+
+    fn handle_select_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let song_len = self.indexer.song_len();
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let height = 20;
+        match key.code {
+            KeyCode::Esc => {
+                self.state.select_mode = false;
+                self.state.changed = true;
+            }
+
+            KeyCode::Char('c') if ctrl => self.state.quit = true,
+            KeyCode::Char('n') if ctrl => self.next(),
+            KeyCode::Char(_) => {
+                self.state.select_mode = false;
+                self.state.changed = true;
+                self.handle_player_key(key)?;
+            }
+            KeyCode::Up => self.state.selected -= if self.state.selected > 0 { 1 } else { 0 },
+            KeyCode::PageUp => {
+                self.state.selected = if self.state.selected >= height {
+                    self.state.selected - height
+                } else {
+                    0
+                }
+            }
+            KeyCode::PageDown => self.state.selected += height,
+            KeyCode::Down => self.state.selected += 1,
+            KeyCode::Left => self.send_cmd(Player::prev_song),
+            KeyCode::Enter => {
+                if let Some(song) = self.indexer.get_song(self.state.selected) {
+                    self.song_queue.push_front(song.path().into());
+                    self.next();
+                }
+                self.state.changed = true;
+                self.state.select_mode = false;
+            }
+            _ => {}
+        }
+
+        if self.state.selected < self.state.start_pos {
+            self.state.start_pos = if self.state.start_pos >= height {
+                self.state.start_pos - height
+            } else {
+                0
+            }
+        } else if self.state.selected >= self.state.start_pos + height {
+            self.state.start_pos += height
+        }
+        if self.state.selected >= song_len - 1 {
+            self.state.selected = song_len - 1;
+        }
+        if self.state.start_pos > song_len - height {
+            self.state.start_pos = song_len - height;
+        }
         Ok(())
     }
 
@@ -400,58 +491,14 @@ impl RustPlay {
         }
         if let Event::Key(key) = event::read()? {
             if key.kind == event::KeyEventKind::Press {
-                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
                 if self.state.select_mode {
-                    match key.code {
-                        KeyCode::Esc => {
-                            self.state.select_mode = false;
-                            self.state.changed = true;
-                        }
-
-                        KeyCode::Char('c') if ctrl => return Ok(true),
-                        KeyCode::Char('n') if ctrl => self.next(),
-                        KeyCode::Up => {
-                            if self.state.selected > 0 {
-                                self.state.selected -= 1;
-                            }
-                        }
-                        KeyCode::Down => {
-                            if self.state.selected + 1 < self.state.result.len() {
-                                self.state.selected += 1;
-                            }
-                        }
-                        KeyCode::Left => self.send_cmd(Player::prev_song),
-                        KeyCode::Enter => {
-                            if !self.state.result.is_empty() {
-                                let path = self.state.result[self.state.selected].clone();
-                                self.song_queue.push_front(path.into());
-                                self.next();
-                            }
-                            self.state.changed = true;
-                            self.state.select_mode = false;
-                        }
-                        _ => {}
-                    }
+                    self.handle_select_key(key)?;
                 } else {
-                    match key.code {
-                        KeyCode::Esc => return Ok(true),
-                        KeyCode::Up | KeyCode::Down => {
-                            self.state.select_mode = true;
-                        }
-                        KeyCode::Char('c') if ctrl => return Ok(true),
-                        KeyCode::Char('n') if ctrl => self.next(),
-                        KeyCode::Right => self.send_cmd(Player::next_song),
-                        KeyCode::Left => self.send_cmd(Player::prev_song),
-                        KeyCode::Backspace => self.shell.del(),
-                        KeyCode::Char(x) => self.shell.insert(x),
-                        KeyCode::Enter => self.search()?,
-                        _ => {}
-                    }
+                    self.handle_player_key(key)?;
                 }
             }
         }
-        Ok(false)
+        Ok(self.state.quit)
     }
 
     pub fn next(&mut self) {
@@ -459,12 +506,14 @@ impl RustPlay {
         if let Some(s) = self.song_queue.pop_front() {
             self.send_cmd(move |p| p.load(&s));
         } else if let Some(s) = self.indexer.next() {
-            self.send_cmd(move |p| p.load(s.path()));
-            if let Some(next) = self.song_queue.front() {
-                self.state
-                    .meta
-                    .insert("next_song".into(), Value::Text(next.display().to_string()));
-            }
+            let path = s.path().to_owned();
+            self.state.meta = s.meta_data;
+            self.send_cmd(move |p| p.load(&path));
+            // if let Some(next) = self.song_queue.front() {
+            //     self.state
+            //         .meta
+            //         .insert("next_song".into(), Value::Text(next.display().to_string()));
+            // }
         }
     }
 

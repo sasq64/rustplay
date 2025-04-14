@@ -16,6 +16,7 @@ use tantivy::query::QueryParser;
 
 use anyhow::Context;
 use anyhow::Result;
+use anyhow::anyhow;
 use tantivy::{Index, IndexWriter, ReloadPolicy, doc};
 use tantivy::{IndexReader, schema::*};
 use walkdir::WalkDir;
@@ -32,15 +33,27 @@ fn slice_to_string(slice: &[u8]) -> String {
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq)]
 pub struct FileInfo {
     path: PathBuf,
-    meta_data: HashMap<String, value::Value>,
+    pub meta_data: HashMap<String, value::Value>,
 }
 
 impl FileInfo {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    pub fn get(&self, what: &str) -> &value::Value {
+        self.meta_data.get(what).unwrap_or(&value::Value::Unknown())
+    }
+
+    pub fn title_and_composer(&self) -> String {
+        let title = self.get("title");
+        let composer = self.get("composer");
+        format!("{title} / {composer}")
+    }
+
     pub fn title(&self) -> Option<String> {
         if let Some(value::Value::Text(title)) = self.meta_data.get("title") {
             return Some(title.to_owned());
@@ -58,7 +71,7 @@ pub struct Indexer {
     index: Index,
     index_writer: IndexWriter,
     reader: IndexReader,
-    pub result: Vec<String>,
+    pub result: Vec<FileInfo>,
 
     title_field: Field,
     composer_field: Field,
@@ -67,6 +80,16 @@ pub struct Indexer {
 
     song_list: VecDeque<FileInfo>,
     count: AtomicUsize,
+}
+
+fn get_string(doc: &TantivyDocument, field: &Field) -> Result<String> {
+    if let Some(path_val) = doc.get_first(*field) {
+        return match path_val {
+            OwnedValue::Str(name) => Ok(name.to_owned()),
+            _ => Err(anyhow!("")),
+        };
+    }
+    Ok("???".to_owned())
 }
 
 impl Indexer {
@@ -188,17 +211,21 @@ impl Indexer {
             vec![self.title_field, self.composer_field, self.file_field],
         );
         let query = query_parser.parse_query(query)?;
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(10000))?;
         //println!("Found {}", top_docs.len());
         self.result.clear();
         for (_score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let path_val = doc.get_first(self.path_field).context("No path field")?;
-            let path = match path_val {
-                OwnedValue::Str(name) => name,
-                _ => "",
-            };
-            self.result.push(path.into());
+            let path = get_string(&doc, &self.path_field)?;
+            let title = get_string(&doc, &self.title_field)?;
+            let composer = get_string(&doc, &self.composer_field)?;
+            self.result.push(FileInfo {
+                path: path.into(),
+                meta_data: HashMap::from([
+                    ("title".into(), value::Value::Text(title)),
+                    ("composer".into(), value::Value::Text(composer)),
+                ]),
+            });
         }
         Ok(())
     }
@@ -210,6 +237,7 @@ pub struct RemoteIndexer {
     index_thread: Option<JoinHandle<()>>,
 }
 
+#[derive(Debug, Clone, PartialEq)]
 enum Cmd {
     AddPath(PathBuf),
 }
@@ -270,10 +298,10 @@ impl RemoteIndexer {
         return self.indexer.lock().unwrap().next();
     }
 
-    pub fn search(&mut self, query: &str) -> Result<Vec<String>> {
+    pub fn search(&mut self, query: &str) -> Result<()> {
         let mut indexer = self.indexer.lock().unwrap();
         indexer.search(query)?;
-        Ok(indexer.result.clone())
+        Ok(())
     }
 
     pub fn index_count(&self) -> usize {
@@ -282,6 +310,28 @@ impl RemoteIndexer {
     }
 
     pub fn commit(&self) {}
+
+    pub fn get_songs(&self, start: usize, stop: usize) -> Result<Vec<FileInfo>> {
+        let indexer = self.indexer.lock().unwrap();
+        let song_len = indexer.result.len();
+        if song_len == 0 {
+            return Ok(Vec::new());
+        }
+        if stop > song_len {
+            return Ok(indexer.result[start..song_len].to_vec());
+        }
+        Ok(indexer.result[start..stop].to_vec())
+    }
+
+    pub(crate) fn get_song(&self, index: usize) -> Option<FileInfo> {
+        let indexer = self.indexer.lock().unwrap();
+        indexer.result.get(index).cloned()
+    }
+
+    pub fn song_len(&self) -> usize {
+        let indexer = self.indexer.lock().unwrap();
+        indexer.result.len()
+    }
 }
 
 #[cfg(test)]
@@ -304,7 +354,7 @@ mod tests {
 
     #[test]
     #[allow(clippy::unwrap_used)]
-    fn search_works() {
+    fn normal_search_works() {
         let mut indexer = Indexer::new().unwrap();
         let path: PathBuf = "../musicplayer/music/C64/Ark_Pandora.sid".into();
         let info = musix::identify_song(&path).unwrap();
@@ -320,17 +370,22 @@ mod tests {
         indexer.search("purple motion").unwrap();
         assert_eq!(indexer.result.len(), 1);
 
-        let path: PathBuf = "../musicplayer/music/C64".into();
+        let path: PathBuf = "../musicplayer/music".into();
         for entry in WalkDir::new(path) {
             let e = entry.unwrap();
             if e.path().is_file() {
-                let info = musix::identify_song(e.path()).unwrap();
-                indexer.add_with_info(e.path(), &info).unwrap();
+                if let Some(info) = musix::identify_song(e.path()) {
+                    indexer.add_with_info(e.path(), &info).unwrap();
+                } else {
+                    indexer.add_path(e.path()).unwrap();
+                }
             }
         }
         indexer.commit().unwrap();
         indexer.search("hubbard").unwrap();
         assert!(indexer.result.len() > 3);
+        indexer.search("horace").unwrap();
+        assert!(indexer.result.len() == 1);
         indexer.search("ninja").unwrap();
         assert!(indexer.result.len() >= 3);
         indexer.search("xywizoqp").unwrap();
@@ -341,12 +396,12 @@ mod tests {
     #[allow(clippy::unwrap_used)]
     fn threaded_search_works() {
         let mut indexer = RemoteIndexer::new().unwrap();
-        let path: PathBuf = "../musicplayer/music/C64".into();
+        let path: PathBuf = "../musicplayer/music".into();
         indexer.add_path(&path);
         std::thread::sleep(std::time::Duration::from_millis(500));
-        let result = indexer.search("pandora").unwrap();
-        assert!(result.len() == 1);
-        let result = indexer.search("ninja").unwrap();
-        assert!(result.len() == 3);
+        indexer.search("horace").unwrap();
+        assert!(indexer.song_len() == 1);
+        indexer.search("ninja").unwrap();
+        assert!(indexer.song_len() == 3);
     }
 }

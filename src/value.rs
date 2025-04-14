@@ -3,11 +3,13 @@ use std::fmt::Display;
 
 use musix::MusicError;
 
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Value {
     Text(String),
     Number(i32),
     Data(Vec<u8>),
     Error(MusicError),
+    Unknown(),
 }
 
 impl Display for Value {
@@ -17,6 +19,7 @@ impl Display for Value {
             Value::Number(n) => write!(f, "{n:02}")?,
             Value::Error(e) => write!(f, "{e}")?,
             Value::Data(_) => write!(f, "Data")?,
+            Value::Unknown() => write!(f, "???")?,
         }
         Ok(())
     }

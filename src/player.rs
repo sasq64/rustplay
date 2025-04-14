@@ -37,7 +37,7 @@ fn parse_mp3<R: Read>(reader: &mut R) -> io::Result<bool> {
     Ok(true)
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 #[allow(clippy::struct_field_names)]
 pub(crate) struct Player {
     chip_player: Option<ChipPlayer>,
@@ -71,6 +71,15 @@ impl Player {
                 cp.seek(self.song - 1, 0);
                 self.reset();
             }
+        }
+        Ok(true)
+    }
+
+    pub fn set_song(&mut self, song: i32) -> PlayResult {
+        if let Some(cp) = &self.chip_player {
+            self.song = song;
+            cp.seek(self.song - 1, 0);
+            self.reset();
         }
         Ok(true)
     }
@@ -284,7 +293,7 @@ mod tests {
         let data = Path::new("data");
         assert!(data.is_dir());
         musix::init(data).unwrap();
-        let mut chip_player = musix::load_song(Path::new("Chimera.sid")).unwrap();
+        let mut chip_player = musix::load_song(Path::new("music.mod")).unwrap();
         let mut target = vec![0; 1024];
         let rc = chip_player.get_samples(&mut target);
         assert_eq!(rc, 1024);
