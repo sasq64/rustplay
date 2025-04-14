@@ -5,7 +5,6 @@ use std::fs::File;
 use std::io::Write as _;
 use std::io::{self, stdout};
 use std::panic;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::{path::Path, thread::JoinHandle};
@@ -32,7 +31,7 @@ use crossterm::{
 
 mod indexer;
 
-use indexer::RemoteIndexer;
+use indexer::{FileInfo, RemoteIndexer};
 
 #[derive(Default)]
 struct State {
@@ -52,59 +51,56 @@ struct State {
 }
 
 impl State {
-    pub fn update_meta(&mut self, info_consumer: &mut mpsc::Receiver<Info>, log_file: &mut File) {
-        while let Ok((meta, val)) = info_consumer.try_recv() {
-            if meta != "fft" {
-                writeln!(log_file, "SONG-META {} = {}", meta, val).unwrap();
-            }
-
-            match val {
-                Value::Number(n) => {
-                    self.changed = true;
-                    match meta.as_str() {
-                        "done" => self.done = true,
-                        "length" => {
-                            self.meta.insert(
-                                "len".to_owned(),
-                                Value::Text(format!("{:02}:{:02}", n / 60, n % 60).to_owned()),
-                            );
-                        }
-                        "song" => {
-                            self.song = n;
-                            self.meta.insert("isong".into(), (n + 1).into());
-                        }
-                        "songs" => self.songs = n,
-                        &_ => {}
+    pub fn update_meta(&mut self, meta: &str, val: Value) {
+        match val {
+            Value::Number(n) => {
+                self.changed = true;
+                match meta {
+                    "done" => self.done = true,
+                    "length" => {
+                        self.meta.insert(
+                            "len".to_owned(),
+                            Value::Text(format!("{:02}:{:02}", n / 60, n % 60).to_owned()),
+                        );
                     }
+                    "song" => {
+                        self.song = n;
+                        self.meta.insert("isong".into(), (n + 1).into());
+                    }
+                    "songs" => self.songs = n,
+                    &_ => {}
                 }
-                Value::Text(_) => {
-                    self.changed = true;
-                }
-                Value::Error(ref e) => {
-                    self.errors.push_back((*e).to_string());
-                }
-                Value::Data(_) | Value::Unknown() => {}
             }
-            self.meta.insert(meta, val);
+            Value::Text(ref t) => {
+                if t.is_empty() {
+                    return;
+                }
+                self.changed = true;
+            }
+            Value::Error(ref e) => {
+                self.errors.push_back((*e).to_string());
+            }
+            Value::Data(_) | Value::Unknown() => {}
         }
-        if self.changed {
-            self.update_title();
-        }
+
+        self.meta.insert(meta.to_owned(), val);
     }
 
     fn update_title(&mut self) {
-        let game = self.get_meta("game");
-        let title = self.get_meta("title");
-        let composer = self.get_meta_or("composer", "??");
-        let full_title = if game.is_empty() {
-            title.to_string()
-        } else if title.is_empty() {
-            game.to_string()
-        } else {
-            format!("{title} ({game})")
-        };
-        self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
-        self.set_meta("full_title", full_title);
+        if self.changed {
+            let game = self.get_meta("game");
+            let title = self.get_meta("title");
+            let composer = self.get_meta_or("composer", "??");
+            let full_title = if game.is_empty() {
+                title.to_string()
+            } else if title.is_empty() {
+                game.to_string()
+            } else {
+                format!("{title} ({game})")
+            };
+            self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
+            self.set_meta("full_title", full_title);
+        }
     }
 
     fn get_meta(&self, name: &str) -> &str {
@@ -198,7 +194,7 @@ pub(crate) struct RustPlay {
     msec: Arc<AtomicUsize>,
     data: Vec<f32>,
     player_thread: Option<JoinHandle<()>>,
-    song_queue: VecDeque<PathBuf>,
+    song_queue: VecDeque<FileInfo>,
     fft_pos: VisualizerPos,
     fft_height: usize,
     errors: VecDeque<String>,
@@ -310,13 +306,12 @@ impl RustPlay {
             let start = self.state.start_pos;
             let songs = self.indexer.get_songs(start, start + height)?;
             for (i, song) in songs.into_iter().enumerate() {
-                //for (i, val) in self.state.result.iter().enumerate() {
                 out.queue(if i == self.state.selected - start {
                     cursor_bg
                 } else {
                     black_bg
                 })?
-                .queue(Print(song.title_and_composer()))?
+                .queue(Print(song.full_song_name()))?
                 .queue(MoveToNextLine(1))?;
             }
             out.flush()?;
@@ -463,7 +458,7 @@ impl RustPlay {
             KeyCode::Left => self.send_cmd(Player::prev_song),
             KeyCode::Enter => {
                 if let Some(song) = self.indexer.get_song(self.state.selected) {
-                    self.song_queue.push_front(song.path().into());
+                    self.song_queue.push_front(song);
                     self.next();
                 }
                 self.state.changed = true;
@@ -512,20 +507,14 @@ impl RustPlay {
 
     pub fn next(&mut self) {
         self.state.clear_meta();
-        if let Some(s) = self.song_queue.pop_front() {
-            self.send_cmd(move |p| p.load(&s));
-        } else if let Some(s) = self.indexer.next() {
-            let path = s.path().to_owned();
-            for (name, val) in s.meta_data.iter() {
+        if let Some(song) = self.song_queue.pop_front().or(self.indexer.next()) {
+            let path = song.path().to_owned();
+            for (name, val) in song.meta_data.iter() {
                 self.log(&format!("INDEX-META {name} = {val}")).unwrap();
+                self.state.update_meta(name, val.clone());
             }
-            self.state.meta = s.meta_data;
+            self.state.update_title();
             self.send_cmd(move |p| p.load(&path));
-            // if let Some(next) = self.song_queue.front() {
-            //     self.state
-            //         .meta
-            //         .insert("next_song".into(), Value::Text(next.display().to_string()));
-            // }
         }
     }
 
@@ -534,8 +523,13 @@ impl RustPlay {
             self.next();
             self.state.done = false;
         }
-        self.state
-            .update_meta(&mut self.info_consumer, &mut self.log_file);
+        while let Ok((meta, val)) = self.info_consumer.try_recv() {
+            if meta != "fft" {
+                self.log(&format!("SONG-META {} = {}", meta, val)).unwrap();
+            }
+            self.state.update_meta(&meta, val);
+        }
+        self.state.update_title();
     }
 
     pub fn add_song(&mut self, song: &Path) -> Result<(), io::Error> {
