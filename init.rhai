@@ -9,7 +9,7 @@ template(`
   NEXT: $next_song
 @isong=a
 @songs=b
-@format=f
+@format=fmt
 @count=:#808080
 @sub_title=:#a0a0a0
 @title_and_composer=:#ffffff

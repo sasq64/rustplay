@@ -1,6 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, VecDeque};
+use std::fs::File;
 use std::io::Write as _;
 use std::io::{self, stdout};
 use std::panic;
@@ -51,11 +52,12 @@ struct State {
 }
 
 impl State {
-    pub fn update_meta(&mut self, info_consumer: &mut mpsc::Receiver<Info>) {
+    pub fn update_meta(&mut self, info_consumer: &mut mpsc::Receiver<Info>, log_file: &mut File) {
         while let Ok((meta, val)) = info_consumer.try_recv() {
             if meta != "fft" {
-                //    println!("{} = {}", meta, val);
+                writeln!(log_file, "SONG-META {} = {}", meta, val).unwrap();
             }
+
             match val {
                 Value::Number(n) => {
                     self.changed = true;
@@ -201,6 +203,7 @@ pub(crate) struct RustPlay {
     fft_height: usize,
     errors: VecDeque<String>,
     state: State,
+    log_file: File,
     no_term: bool,
     shell: Shell,
     indexer: RemoteIndexer,
@@ -241,10 +244,16 @@ impl RustPlay {
             fft_height: settings.args.visualizer_height,
             errors: VecDeque::new(),
             state: State::default(),
+            log_file: File::create(".rustplay.log")?,
             no_term: settings.args.no_term,
             shell: Shell::new(),
             indexer: RemoteIndexer::new()?,
         })
+    }
+
+    fn log(&mut self, text: &str) -> io::Result<()> {
+        writeln!(self.log_file, "{}", text)?;
+        self.log_file.flush()
     }
 
     fn setup_term() -> io::Result<()> {
@@ -507,6 +516,9 @@ impl RustPlay {
             self.send_cmd(move |p| p.load(&s));
         } else if let Some(s) = self.indexer.next() {
             let path = s.path().to_owned();
+            for (name, val) in s.meta_data.iter() {
+                self.log(&format!("INDEX-META {name} = {val}")).unwrap();
+            }
             self.state.meta = s.meta_data;
             self.send_cmd(move |p| p.load(&path));
             // if let Some(next) = self.song_queue.front() {
@@ -522,7 +534,8 @@ impl RustPlay {
             self.next();
             self.state.done = false;
         }
-        self.state.update_meta(&mut self.info_consumer);
+        self.state
+            .update_meta(&mut self.info_consumer, &mut self.log_file);
     }
 
     pub fn add_song(&mut self, song: &Path) -> Result<(), io::Error> {

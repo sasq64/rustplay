@@ -181,10 +181,10 @@ impl Indexer {
         if self.song_list.len() < 100 {
             let file_info = FileInfo {
                 path: song_path.into(),
-                meta_data: HashMap::from([(
-                    "title".into(),
-                    value::Value::Text(info.title.clone()),
-                )]),
+                meta_data: HashMap::from([
+                    ("title".into(), value::Value::Text(info.title.clone())),
+                    ("composer".into(), value::Value::Text(info.composer.clone())),
+                ]),
             };
             self.song_list.push_back(file_info);
         }
