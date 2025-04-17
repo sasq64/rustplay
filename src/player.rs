@@ -56,14 +56,16 @@ impl Player {
 
     #[allow(clippy::unnecessary_wraps)]
     pub fn next_song(&mut self) -> PlayResult {
+        let cp = self.chip_player.as_ref().ok_or(MusicError {
+            msg: "No active song".into(),
+        })?;
         if self.song < (self.songs - 1) {
-            if let Some(cp) = &self.chip_player {
-                cp.seek(self.song + 1, 0);
-                self.reset();
-            }
+            cp.seek(self.song + 1, 0);
+            self.reset();
         }
         Ok(true)
     }
+
     #[allow(clippy::unnecessary_wraps)]
     pub fn prev_song(&mut self) -> PlayResult {
         if self.song > 0 {
@@ -75,6 +77,7 @@ impl Player {
         Ok(true)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn set_song(&mut self, song: i32) -> PlayResult {
         if let Some(cp) = &self.chip_player {
             self.song = song;
@@ -221,7 +224,7 @@ pub(crate) fn run_player(
                 ..Player::default()
             };
 
-            info_producer.push_value("done", 0)?;
+            // info_producer.push_value("done", 0)?;
 
             while !player.quitting {
                 while let Ok(cmd_fn) = cmd_consumer.try_recv() {
@@ -267,6 +270,7 @@ pub(crate) fn run_player(
                     std::thread::sleep(Duration::from_millis(100));
                 }
             }
+            info_producer.push_value("quit", 1)?;
             Ok(())
         };
         main().expect("Fail");
@@ -282,7 +286,10 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
 
+    use musix::MusicError;
+
     use crate::Args;
+    use crate::value::Value;
 
     use super::Cmd;
     use super::Info;
@@ -315,15 +322,32 @@ mod tests {
         let player_thread =
             crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
 
-        cmd_producer
-            .send(Box::new(move |p| p.quit()))
-            .unwrap_or_else(|_| panic!("Could not push to cmd_producer"));
-        thread::sleep(time::Duration::from_millis(500));
-        let _ = info_consumer.recv().unwrap();
-        if player_thread.is_finished() {
-            player_thread.join().unwrap();
-        } else {
-            panic!("Thread did not quit");
-        }
+        cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
+        let (key, _) = info_consumer.recv().unwrap();
+        assert_eq!(key, "quit");
+        player_thread.join().unwrap();
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn player_can_report_errors() {
+        let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
+
+        // Receive info from player
+        let (info_producer, info_consumer) = mpsc::channel::<Info>();
+        let msec = Arc::new(AtomicUsize::new(0));
+        let args = Args { ..Args::default() };
+        let player_thread =
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
+
+        cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
+        let (_, val) = info_consumer.recv().unwrap();
+        assert!(matches!(val, Value::Error(_)));
+
+        cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
+        let (key, _) = info_consumer.recv().unwrap();
+
+        assert_eq!(key, "quit");
+        player_thread.join().unwrap();
     }
 }

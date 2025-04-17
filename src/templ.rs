@@ -1,4 +1,4 @@
-#![allow(clippy::unwrap_used)]
+use anyhow::Result;
 use crossterm::style::{Color, SetForegroundColor};
 use regex::Regex;
 use std::borrow::Borrow;
@@ -21,6 +21,7 @@ struct PlaceHolder {
 
 pub struct Template {
     templ: Vec<String>,
+    use_color: bool,
     data: HashMap<String, PlaceHolder>,
 }
 
@@ -55,11 +56,48 @@ impl Template {
     pub fn height(&self) -> usize {
         self.templ.len()
     }
-
-    pub fn render<T: Display, Q: Hash + Eq + Borrow<str>>(
+    pub fn write<T: Display, Q: Hash + Eq + Borrow<str>>(
         &self,
         data: &HashMap<Q, T>,
-    ) -> Vec<String> {
+        x: u16,
+        y: u16,
+    ) -> io::Result<()> {
+        for (i, line) in self.templ.iter().enumerate() {
+            stdout()
+                .queue(cursor::MoveTo(x, y + i as u16))?
+                .queue(Print(line))?;
+        }
+
+        for (key, val) in data {
+            self.write_field(x, y, key.borrow(), val)?;
+        }
+        Ok(())
+    }
+
+    pub fn write_field<T: Display>(&self, x: u16, y: u16, key: &str, val: &T) -> io::Result<()> {
+        if let Some(ph) = self.data.get(key) {
+            let text = format!("{val}");
+            let l = usize::min(text.len(), ph.len);
+            if self.use_color {
+                stdout().queue(SetForegroundColor(color(ph.color)))?;
+            }
+            stdout()
+                .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
+                .queue(Print(&text[..l]))?;
+        }
+        Ok(())
+    }
+
+    pub fn get_pos(&self, id: &str) -> Option<(u16, u16)> {
+        if let Some(ph) = self.data.get(id) {
+            return Some((ph.col as u16, ph.line as u16));
+        }
+        None
+    }
+
+    // For testing?
+
+    fn render<T: Display, Q: Hash + Eq + Borrow<str>>(&self, data: &HashMap<Q, T>) -> Vec<String> {
         let mut result = self.templ.clone();
         for (key, val) in data {
             if let Some(ph) = self.data.get(key.borrow()) {
@@ -76,50 +114,7 @@ impl Template {
         result
     }
 
-    pub fn write<T: Display, Q: Hash + Eq + Borrow<str>>(
-        &self,
-        data: &HashMap<Q, T>,
-        x: u16,
-        y: u16,
-    ) -> io::Result<()> {
-        for (i, line) in self.templ.iter().enumerate() {
-            stdout()
-                .queue(cursor::MoveTo(x, y + i as u16))?
-                .queue(Print(line))?;
-        }
-
-        for (key, val) in data {
-            if let Some(ph) = self.data.get(key.borrow()) {
-                let text = format!("{val}");
-                let l = usize::min(text.len(), ph.len);
-                stdout()
-                    .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
-                    .queue(SetForegroundColor(color(ph.color)))?
-                    .queue(Print(&text[..l]))?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn write_field(&self, x: u16, y: u16, key: &str, text: &str) -> io::Result<()> {
-        if let Some(ph) = self.data.get(key) {
-            let l = usize::min(text.len(), ph.len);
-            stdout()
-                .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
-                .queue(SetForegroundColor(color(ph.color)))?
-                .queue(Print(&text[..l]))?;
-        }
-        Ok(())
-    }
-
-    pub fn get_pos(&self, id: &str) -> Option<(u16, u16)> {
-        if let Some(ph) = self.data.get(id) {
-            return Some((ph.col as u16, ph.line as u16));
-        }
-        None
-    }
-
-    pub fn render_string<T: Display, Q: Hash + Eq + Borrow<str>>(
+    fn render_string<T: Display, Q: Hash + Eq + Borrow<str>>(
         &self,
         data: &HashMap<Q, T>,
     ) -> String {
@@ -127,20 +122,24 @@ impl Template {
         result.join("\n")
     }
 
-    /// Template contains text or special patterns that are replaced
-    /// `$>` Pattern removed, previous character is repeated until current line length = target length
-    /// `$^` Pattern replaced with spaces, current line becomes part of vertical resize and may be
-    ///      duplicated any number of times
-    ///  `$<symbol>` Pattern first replaced with spaces then with value from hashmap
+    /// Template contains text or special patterns that are replaced;
+    ///
+    /// `$>` Pattern removed, next character is repeated until current line
+    /// length = target length
+    ///
+    /// `$^` Pattern replaced with spaces, current line becomes part of
+    /// vertical resize and may be duplicated any number of times.
+    ///
+    /// `$<symbol>` Pattern first replaced with spaces then with value from
+    /// hashmap
     ///
     /// Special lines
     ///
-    /// Variable alias
-    /// `@short_symbol = real_symbol`
+    /// Variable alias `@short_symbol = real_symbol`
     ///
-    pub fn new(templ: &str, w: usize, h: usize) -> Template {
+    pub fn new(templ: &str, w: usize, h: usize) -> Result<Template> {
         let spaces = "                                                                   ";
-        let alias_re = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?").unwrap();
+        let alias_re = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?")?;
 
         let mut data = HashMap::<String, PlaceHolder>::new();
         let mut dup_indexes = Vec::new();
@@ -148,25 +147,29 @@ impl Template {
         let mut renames: HashMap<&str, &str> = HashMap::new();
         let mut colors: HashMap<&str, u32> = HashMap::new();
 
-        let mut lines: Vec<&str> = templ.lines().collect();
         // Strip alias assignments from template
-        lines.retain(|line| {
-            if let Some(m) = alias_re.captures(line) {
-                let var = m.get(1).unwrap().as_str();
-                if let Some(alias) = m.get(2) {
-                    renames.insert(alias.as_str(), var);
+        let lines: Vec<&str> = templ
+            .lines()
+            .filter(|line| {
+                if let Some(m) = alias_re.captures(line) {
+                    if let Some(var) = m.get(1) {
+                        if let Some(alias) = m.get(2) {
+                            renames.insert(alias.as_str(), var.as_str());
+                        }
+                        if let Some(color) = m.get(4) {
+                            if let Ok(rgb) = u32::from_str_radix(color.as_str(), 16) {
+                                colors.insert(var.as_str(), rgb);
+                            }
+                        }
+                    }
+                    return false;
                 }
-                if let Some(color) = m.get(4) {
-                    let rgb = u32::from_str_radix(color.as_str(), 16).unwrap();
-                    colors.insert(var, rgb);
-                }
-                return false;
-            }
-            true
-        });
-
+                true
+            })
+            .collect();
         // Find fill patterns ($> and $^), resize vertically and prepare for horizontal
-        let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))").unwrap();
+        let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))")?;
+        // Captures: var = var_name, char = char to repeat for '$>', fill = '^' for line dup
         let mut out: Vec<String> = lines
             .iter()
             .enumerate()
@@ -241,11 +244,16 @@ impl Template {
                 target.replace_range(start..end, &spaces[0..(end - start)]);
             }
         }
-        Template { templ: out, data }
+        Ok(Template {
+            templ: out,
+            use_color: false,
+            data,
+        })
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::collections::HashMap;
 
@@ -256,7 +264,7 @@ mod tests {
     #[test]
     fn template_works() {
         let data = HashMap::from([("one", 9)]);
-        let result = Template::new("Line $one\nX $x!\n---$>--", 10, 3);
+        let result = Template::new("Line $one\nX $x!\n---$>--", 10, 3).unwrap();
         let text = result.as_string();
         //println!(":: {}", text);
         assert!(text == "Line     \nX   !\n----------");
@@ -278,7 +286,8 @@ mod tests {
 "#,
             20,
             5,
-        );
+        )
+        .unwrap();
 
         let text = result.render_string(&HashMap::from([("hello", "DOG!")]));
         //println!("{}", text);
@@ -316,7 +325,7 @@ mod tests {
         song_meta.insert("xxx".to_string(), Value::Data(Vec::<u8>::new()));
 
         //let templ = Template::new("TITLE:    $full_title\n          $sub_title\nCOMPOSER: $composer\nFORMAT:   $format\n\nTIME: 00:00:00 ($len) SONG: $isong/$songs", 60, 10);
-        let templ = Template::new(include_str!("../screen.templ"), 80, 10);
+        let templ = Template::new(include_str!("../screen.templ"), 80, 10).unwrap();
         let x = templ.render_string(&song_meta);
 
         assert!(x.chars().count() > 400);

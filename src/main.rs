@@ -1,18 +1,11 @@
 #![allow(dead_code)]
 
-use std::{
-    cell::RefCell,
-    error::Error,
-    panic,
-    path::{Path, PathBuf},
-    process,
-    rc::Rc,
-    time::Duration,
-};
+use std::{cell::RefCell, error::Error, panic, path::PathBuf, process, rc::Rc, time::Duration};
 
 mod player;
 mod rustplay;
 mod templ;
+mod term_extra;
 mod value;
 
 use rustplay::RustPlay;
@@ -86,9 +79,9 @@ fn main() -> Result<(), Box<dyn Error>> {
         move |t: &str| t.clone_into(&mut settings.borrow_mut().template)
     });
 
-    let p = Path::new("init.rhai");
+    let p = PathBuf::from("init.rhai");
     if p.is_file() {
-        rhai_engine.run_file(p.into())?;
+        rhai_engine.run_file(p)?;
     } else {
         let script = include_str!("../init.rhai");
         rhai_engine.run(script)?;
@@ -105,15 +98,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     }));
 
     if settings.borrow().args.songs.is_empty() {
-        settings
-            .borrow_mut()
-            .args
-            .songs
-            .push(PathBuf::from("../musicplayer/music"));
+        let test_song: PathBuf = "music.mod".into();
+        if test_song.is_file() {
+            settings.borrow_mut().args.songs.push(test_song);
+        }
     }
 
     for song in &settings.borrow().args.songs {
-        rust_play.add_song(song)?;
+        rust_play.add_path(song)?;
     }
 
     loop {

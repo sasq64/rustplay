@@ -31,6 +31,8 @@ use crossterm::{
 
 mod indexer;
 
+use crate::term_extra::{MaybeCommand, SetReverse};
+
 use indexer::{FileInfo, RemoteIndexer};
 
 #[derive(Default)]
@@ -46,8 +48,8 @@ struct State {
     selected: usize,
     start_pos: usize,
     quit: bool,
+    use_color: bool,
     errors: VecDeque<String>,
-    //result: Vec<String>,
 }
 
 impl State {
@@ -194,11 +196,11 @@ pub(crate) struct RustPlay {
     msec: Arc<AtomicUsize>,
     data: Vec<f32>,
     player_thread: Option<JoinHandle<()>>,
-    song_queue: VecDeque<FileInfo>,
     fft_pos: VisualizerPos,
     fft_height: usize,
     errors: VecDeque<String>,
     state: State,
+    height: usize,
     log_file: File,
     no_term: bool,
     shell: Shell,
@@ -218,10 +220,9 @@ impl RustPlay {
             Self::setup_term()?;
         }
 
-        let (w, _) = terminal::size()?;
+        let (w, h) = terminal::size()?;
 
-        // include_str!("../screen.templ"), 72, 10
-        let templ = Template::new(&settings.template, w as usize, 10);
+        let templ = Template::new(&settings.template, w as usize, 10)?;
 
         Ok(RustPlay {
             cmd_producer,
@@ -235,11 +236,14 @@ impl RustPlay {
                 cmd_consumer,
                 msec,
             )?),
-            song_queue: VecDeque::new(),
             fft_pos: settings.args.visualizer,
             fft_height: settings.args.visualizer_height,
             errors: VecDeque::new(),
-            state: State::default(),
+            state: State {
+                changed: true,
+                ..State::default()
+            },
+            height: h.into(),
             log_file: File::create(".rustplay.log")?,
             no_term: settings.args.no_term,
             shell: Shell::new(),
@@ -268,22 +272,41 @@ impl RustPlay {
         disable_raw_mode()
     }
 
+    fn bg_color(&self, color: Color) -> MaybeCommand<SetBackgroundColor> {
+        if self.state.use_color {
+            MaybeCommand::Set(SetBackgroundColor(color))
+        } else {
+            MaybeCommand::None
+        }
+    }
+
+    fn fg_color(&self, color: Color) -> MaybeCommand<SetForegroundColor> {
+        if self.state.use_color {
+            MaybeCommand::Set(SetForegroundColor(color))
+        } else {
+            MaybeCommand::None
+        }
+    }
+
     pub fn draw_screen(&mut self) -> Result<()> {
         if self.no_term {
             return Ok(());
         }
-        let black_bg = SetBackgroundColor(Color::Rgb { r: 0, g: 0, b: 0 });
+
+        //let black_bg = self.bg_color(Color::Rgb { r: 0, g: 0, b: 0 });
+        //let cursor_bg = self.bg_color(Color::White);
+        let black_bg = SetReverse(false);
+        let cursor_bg = SetReverse(true);
+
         stdout().queue(black_bg)?.flush()?;
         if self.state.changed {
             self.state.changed = false;
             stdout()
                 .queue(Clear(ClearType::All))?
-                .queue(SetForegroundColor(Color::Cyan))?;
+                .queue(self.fg_color(Color::Cyan))?;
             self.templ.write(&self.state.meta, 0, 0)?;
         }
 
-        //let black_bg = SetBackgroundColor(Color::Reset);
-        let cursor_bg = SetBackgroundColor(Color::White);
         let mut out = stdout();
 
         let (first, cursor, last) = self.shell.command_line();
@@ -291,7 +314,7 @@ impl RustPlay {
         out.queue(cursor::MoveTo(0, self.templ.height() as u16 + 1))?
             .queue(Clear(ClearType::UntilNewLine))?
             .queue(black_bg)?
-            .queue(SetForegroundColor(Color::Red))?
+            .queue(self.fg_color(Color::Yellow))?
             .queue(Print("> "))?
             .queue(Print(first))?
             .queue(cursor_bg)?
@@ -300,16 +323,15 @@ impl RustPlay {
             .queue(Print(last))?;
 
         if self.state.select_mode {
-            let height = 20;
             out.queue(Clear(ClearType::All))?;
             out.queue(cursor::MoveTo(0, 0))?;
             let start = self.state.start_pos;
-            let songs = self.indexer.get_songs(start, start + height)?;
+            let songs = self.indexer.get_songs(start, start + self.height)?;
             for (i, song) in songs.into_iter().enumerate() {
                 out.queue(if i == self.state.selected - start {
-                    cursor_bg
+                    &cursor_bg
                 } else {
-                    black_bg
+                    &black_bg
                 })?
                 .queue(Print(song.full_song_name()))?
                 .queue(MoveToNextLine(1))?;
@@ -343,12 +365,12 @@ impl RustPlay {
                 let h = self.fft_height;
                 let mut area: Vec<char> = vec![' '; w * h];
                 print_bars(&self.data, &mut area, w, h);
-                out.queue(SetForegroundColor(Color::DarkBlue))?;
+                out.queue(self.fg_color(Color::DarkBlue))?;
                 for i in 0..h {
                     out.queue(cursor::MoveTo(x, y + i as u16))?;
                     if use_color {
                         let col: u8 = ((i * 255) / h) as u8;
-                        out.queue(SetForegroundColor(Color::Rgb {
+                        out.queue(self.fg_color(Color::Rgb {
                             r: 250 - col,
                             g: col,
                             b: 0x40,
@@ -366,7 +388,7 @@ impl RustPlay {
             let empty = "".to_string();
             let err = self.state.errors.front().unwrap_or(&empty);
             out.queue(cursor::MoveTo(2, 1))?
-                .queue(SetForegroundColor(Color::Red))?
+                .queue(self.fg_color(Color::Red))?
                 .queue(Print(err))?;
             if self.state.show_error == 0 {
                 self.state.errors.pop_front();
@@ -431,7 +453,6 @@ impl RustPlay {
     fn handle_select_key(&mut self, key: event::KeyEvent) -> Result<()> {
         let song_len = self.indexer.song_len();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        let height = 20;
         match key.code {
             KeyCode::Esc => {
                 self.state.select_mode = false;
@@ -447,19 +468,18 @@ impl RustPlay {
             }
             KeyCode::Up => self.state.selected -= if self.state.selected > 0 { 1 } else { 0 },
             KeyCode::PageUp => {
-                self.state.selected = if self.state.selected >= height {
-                    self.state.selected - height
+                self.state.selected = if self.state.selected >= self.height {
+                    self.state.selected - self.height
                 } else {
                     0
                 }
             }
-            KeyCode::PageDown => self.state.selected += height,
+            KeyCode::PageDown => self.state.selected += self.height,
             KeyCode::Down => self.state.selected += 1,
             KeyCode::Left => self.send_cmd(Player::prev_song),
             KeyCode::Enter => {
                 if let Some(song) = self.indexer.get_song(self.state.selected) {
-                    self.song_queue.push_front(song);
-                    self.next();
+                    self.play_song(&song);
                 }
                 self.state.changed = true;
                 self.state.select_mode = false;
@@ -468,19 +488,19 @@ impl RustPlay {
         }
 
         if self.state.selected < self.state.start_pos {
-            self.state.start_pos = if self.state.start_pos >= height {
-                self.state.start_pos - height
+            self.state.start_pos = if self.state.start_pos >= self.height {
+                self.state.start_pos - self.height
             } else {
                 0
             }
-        } else if self.state.selected >= self.state.start_pos + height {
-            self.state.start_pos += height
+        } else if self.state.selected >= self.state.start_pos + self.height {
+            self.state.start_pos += self.height
         }
         if self.state.selected >= song_len - 1 {
             self.state.selected = song_len - 1;
         }
-        if self.state.start_pos > song_len - height {
-            self.state.start_pos = song_len - height;
+        if self.state.start_pos > song_len - self.height {
+            self.state.start_pos = song_len - self.height;
         }
         Ok(())
     }
@@ -505,16 +525,20 @@ impl RustPlay {
         Ok(self.state.quit)
     }
 
-    pub fn next(&mut self) {
+    pub fn play_song(&mut self, song: &FileInfo) {
         self.state.clear_meta();
-        if let Some(song) = self.song_queue.pop_front().or(self.indexer.next()) {
-            let path = song.path().to_owned();
-            for (name, val) in song.meta_data.iter() {
-                self.log(&format!("INDEX-META {name} = {val}")).unwrap();
-                self.state.update_meta(name, val.clone());
-            }
-            self.state.update_title();
-            self.send_cmd(move |p| p.load(&path));
+        for (name, val) in song.meta_data.iter() {
+            self.log(&format!("INDEX-META {name} = {val}")).unwrap();
+            self.state.update_meta(name, val.clone());
+        }
+        self.state.update_title();
+        let path = song.path().to_owned();
+        self.send_cmd(move |p| p.load(&path));
+    }
+
+    pub fn next(&mut self) {
+        if let Some(song) = self.indexer.next() {
+            self.play_song(&song);
         }
     }
 
@@ -532,8 +556,8 @@ impl RustPlay {
         self.state.update_title();
     }
 
-    pub fn add_song(&mut self, song: &Path) -> Result<(), io::Error> {
-        self.indexer.add_path(song);
+    pub fn add_path(&mut self, song: &Path) -> Result<()> {
+        self.indexer.add_path(song)?;
         Ok(())
     }
 
