@@ -54,6 +54,9 @@ struct Args {
 
     #[arg(long, default_value_t = false)]
     no_term: bool,
+
+    #[arg(long, short = 'c', default_value_t = false)]
+    no_color: bool,
 }
 
 #[derive(Clone)]

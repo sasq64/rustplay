@@ -280,6 +280,7 @@ pub(crate) fn run_player(
 #[cfg(test)]
 mod tests {
     use std::path::Path;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
@@ -339,6 +340,10 @@ mod tests {
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();
         assert!(matches!(val, Value::Error(_)));
+
+        let path = PathBuf::from("loz15.miniusf");
+        cmd_producer.send(Box::new(move |p| p.load(&path))).unwrap();
+        
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();

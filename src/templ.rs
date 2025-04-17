@@ -122,6 +122,10 @@ impl Template {
         result.join("\n")
     }
 
+    pub fn set_use_color(&mut self, c: bool) {
+        self.use_color = c;
+    }
+
     /// Template contains text or special patterns that are replaced;
     ///
     /// `$>` Pattern removed, next character is repeated until current line

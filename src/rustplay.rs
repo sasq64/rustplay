@@ -221,7 +221,8 @@ impl RustPlay {
 
         let (w, h) = terminal::size()?;
 
-        let templ = Template::new(&settings.template, w as usize, 10)?;
+        let mut templ = Template::new(&settings.template, w as usize, 10)?;
+        templ.set_use_color(!settings.args.no_color);
 
         Ok(RustPlay {
             cmd_producer,
@@ -240,6 +241,7 @@ impl RustPlay {
             errors: VecDeque::new(),
             state: State {
                 changed: true,
+                use_color: !settings.args.no_color,
                 ..State::default()
             },
             height: h.into(),
