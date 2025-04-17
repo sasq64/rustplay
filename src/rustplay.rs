@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::{HashMap, VecDeque};
 use std::fs::File;
 use std::io::Write as _;
@@ -57,19 +55,20 @@ impl State {
         match val {
             Value::Number(n) => {
                 self.changed = true;
+                let i = n as i32;
                 match meta {
                     "done" => self.done = true,
                     "length" => {
                         self.meta.insert(
                             "len".to_owned(),
-                            Value::Text(format!("{:02}:{:02}", n / 60, n % 60).to_owned()),
+                            Value::Text(format!("{:02}:{:02}", i / 60, i % 60).to_owned()),
                         );
                     }
                     "song" => {
-                        self.song = n;
-                        self.meta.insert("isong".into(), (n + 1).into());
+                        self.song = i;
+                        self.meta.insert("isong".into(), (i + 1).into());
                     }
-                    "songs" => self.songs = n,
+                    "songs" => self.songs = i,
                     &_ => {}
                 }
             }
@@ -126,7 +125,7 @@ impl State {
     fn clear_meta(&mut self) {
         self.meta.iter_mut().for_each(|(_, val)| match val {
             Value::Text(t) => *t = String::new(),
-            Value::Number(n) => *n = 0,
+            Value::Number(n) => *n = 0.0,
             _ => (),
         });
     }
@@ -496,12 +495,13 @@ impl RustPlay {
         } else if self.state.selected >= self.state.start_pos + self.height {
             self.state.start_pos += self.height
         }
-        if self.state.selected >= song_len - 1 {
+
+        if self.state.selected + 1 >= song_len {
             self.state.selected = song_len - 1;
         }
-        if self.state.start_pos > song_len - self.height {
-            self.state.start_pos = song_len - self.height;
-        }
+        //if self.state.start_pos + self.height > song_len {
+        //    self.state.start_pos = song_len - self.height;
+        //}
         Ok(())
     }
 

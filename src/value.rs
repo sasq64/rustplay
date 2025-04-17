@@ -6,7 +6,7 @@ use musix::MusicError;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum Value {
     Text(String),
-    Number(i32),
+    Number(f64),
     Data(Vec<u8>),
     Error(MusicError),
     Unknown(),
@@ -25,9 +25,15 @@ impl Display for Value {
     }
 }
 
+impl From<f64> for Value {
+    fn from(item: f64) -> Self {
+        Value::Number(item)
+    }
+}
+
 impl From<i32> for Value {
     fn from(item: i32) -> Self {
-        Value::Number(item)
+        Value::Number(item as f64)
     }
 }
 

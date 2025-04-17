@@ -139,7 +139,7 @@ impl Player {
                         n.into()
                     }
                     "length" => {
-                        let length = val.parse::<i32>()?;
+                        let length = val.parse::<f64>()?;
                         length.into()
                     }
                     &_ => Value::Text(val),
@@ -279,14 +279,10 @@ pub(crate) fn run_player(
 
 #[cfg(test)]
 mod tests {
-    use core::time;
     use std::path::Path;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
-    use std::thread;
-
-    use musix::MusicError;
 
     use crate::Args;
     use crate::value::Value;

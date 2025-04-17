@@ -320,8 +320,8 @@ mod tests {
             "full_title".to_string(),
             Value::Text("Enigma (Musiklinjen)".to_string()),
         );
-        song_meta.insert("isong".to_string(), Value::Number(2));
-        song_meta.insert("len".to_string(), Value::Number(100));
+        song_meta.insert("isong".to_string(), Value::Number(2.0));
+        song_meta.insert("len".to_string(), Value::Number(100.0));
         song_meta.insert("xxx".to_string(), Value::Data(Vec::<u8>::new()));
 
         //let templ = Template::new("TITLE:    $full_title\n          $sub_title\nCOMPOSER: $composer\nFORMAT:   $format\n\nTIME: 00:00:00 ($len) SONG: $isong/$songs", 60, 10);

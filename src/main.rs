@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+//! rustplay main file
 use std::{cell::RefCell, error::Error, panic, path::PathBuf, process, rc::Rc, time::Duration};
 
 mod player;

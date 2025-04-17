@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::Read;
@@ -60,9 +58,6 @@ impl FileInfo {
         let composer = self.get("composer");
         let file_name = self.path.file_name().map(|s| s.to_string_lossy());
         if title != &Value::Unknown() {
-            if let Some(f) = file_name {
-                return format!("{title} / {composer} ({f})");
-            }
             return format!("{title} / {composer}");
         }
         if let Some(file_name) = file_name {
@@ -71,9 +66,9 @@ impl FileInfo {
         "???".into()
     }
 
-    pub fn title(&self) -> Option<String> {
+    pub fn title(&self) -> Option<&str> {
         if let Some(Value::Text(title)) = self.meta_data.get("title") {
-            return Some(title.to_owned());
+            return Some(title);
         }
         None
     }
@@ -93,7 +88,6 @@ pub struct Indexer {
     title_field: Field,
     composer_field: Field,
     path_field: Field,
-    file_field: Field,
 
     song_list: VecDeque<FileInfo>,
     count: AtomicUsize,
@@ -126,7 +120,7 @@ impl Indexer {
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
         let composer_field = schema_builder.add_text_field("composer", TEXT | STORED);
         let path_field = schema_builder.add_text_field("path", STORED);
-        let file_field = schema_builder.add_text_field("file_name", TEXT);
+        //let file_field = schema_builder.add_text_field("file_name", TEXT);
         let schema = schema_builder.build();
 
         let index = Index::create_in_ram(schema.clone());
@@ -148,7 +142,7 @@ impl Indexer {
             title_field,
             composer_field,
             path_field,
-            file_field,
+            //file_field,
             song_list: VecDeque::new(),
             count: 0.into(),
             modland_formats,
@@ -157,11 +151,25 @@ impl Indexer {
 
     pub fn add_with_info(&mut self, song_path: &Path, info: &SongInfo) -> Result<()> {
         self.count.fetch_add(1, Ordering::Relaxed);
+
+        let file_name = song_path.file_stem().unwrap_or_default().to_string_lossy();
+        let title = if !info.title.is_empty() {
+            if !info.game.is_empty() {
+                format!("{} ({})", info.game, info.title)
+            } else {
+                info.title.clone()
+            }
+        } else if !info.game.is_empty() {
+            info.game.clone()
+        } else {
+            file_name.to_string()
+        };
+
         self.index_writer.add_document(doc!(
-                self.title_field => info.title.clone(),
+                self.title_field => title,
                 self.composer_field => info.composer.clone(),
-                self.file_field => song_path.file_name().context("No filename")?
-                                    .to_str().unwrap(),
+                //self.file_field => song_path.file_name().context("No filename")?
+                //                    .to_str().unwrap(),
                 self.path_field => song_path.to_str().context("Illegal path")?
                                     .to_owned()))?;
         if self.song_list.len() < 100 {
@@ -171,6 +179,27 @@ impl Indexer {
                     ("title".into(), Value::Text(info.title.clone())),
                     ("composer".into(), Value::Text(info.composer.clone())),
                 ]),
+            };
+            self.song_list.push_back(file_info);
+        }
+        Ok(())
+    }
+
+    pub fn add_path(&mut self, song_path: &Path) -> Result<()> {
+        if let Some(info) = self.parse_modland_info(song_path) {
+            self.add_with_info(song_path, &info)?;
+            return Ok(());
+        }
+
+        let title = song_path.file_stem().unwrap_or_default().to_string_lossy();
+        self.count.fetch_add(1, Ordering::Relaxed);
+        self.index_writer.add_document(doc!(
+                self.title_field =>  title.to_string(),
+                self.path_field => song_path.to_string_lossy().to_string()))?;
+        if self.song_list.len() < 100 {
+            let file_info = FileInfo {
+                path: song_path.into(),
+                meta_data: HashMap::new(),
             };
             self.song_list.push_back(file_info);
         }
@@ -215,27 +244,6 @@ impl Indexer {
         None
     }
 
-    pub fn add_path(&mut self, song_path: &Path) -> Result<()> {
-        if let Some(info) = self.parse_modland_info(song_path) {
-            self.add_with_info(song_path, &info)?;
-            return Ok(());
-        }
-
-        let title = song_path.file_stem().unwrap_or_default().to_string_lossy();
-        self.count.fetch_add(1, Ordering::Relaxed);
-        self.index_writer.add_document(doc!(
-                self.file_field =>  title.to_string(),
-                self.path_field => song_path.to_string_lossy().to_string()))?;
-        if self.song_list.len() < 100 {
-            let file_info = FileInfo {
-                path: song_path.into(),
-                meta_data: HashMap::new(),
-            };
-            self.song_list.push_back(file_info);
-        }
-        Ok(())
-    }
-
     pub fn identify_song(path: &Path) -> Result<Option<SongInfo>> {
         if let Some(ext) = path.extension() {
             if ext == "sid" {
@@ -268,10 +276,8 @@ impl Indexer {
 
     pub fn search(&mut self, query: &str) -> Result<()> {
         let searcher = self.reader.searcher();
-        let query_parser = QueryParser::for_index(
-            &self.index,
-            vec![self.title_field, self.composer_field, self.file_field],
-        );
+        let query_parser =
+            QueryParser::for_index(&self.index, vec![self.title_field, self.composer_field]);
         let query = query_parser.parse_query(query)?;
         let top_docs = searcher.search(&query, &TopDocs::with_limit(10000))?;
 
