@@ -2,9 +2,9 @@ use super::indexer::{FileInfo, RemoteIndexer};
 use crate::term_extra::{self, SetReverse, TextComponent};
 use anyhow::Result;
 use crossterm::{
-    Command, QueueableCommand,
+    QueueableCommand,
     cursor::{self, MoveToNextLine},
-    event::{self, KeyCode, KeyModifiers},
+    event::{self, KeyCode},
     style::{Color, Print, SetBackgroundColor, SetForegroundColor},
     terminal::{Clear, ClearType},
 };
@@ -18,6 +18,7 @@ pub enum KeyReturn {
     PlaySong(FileInfo),
     Search(String),
     ExitMenu,
+    Navigate,
 }
 
 #[derive(Default)]
@@ -58,11 +59,9 @@ impl term_extra::TextComponent for SongMenu {
         key: event::KeyEvent,
     ) -> Result<KeyReturn> {
         let song_len = indexer.song_len();
-        let mut exit = false;
-        let mut song: Option<FileInfo> = None;
         match key.code {
-            KeyCode::Esc => exit = true,
-            KeyCode::Char(_) => exit = true,
+            KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
+            KeyCode::Char(_) => return Ok(KeyReturn::Navigate),
             KeyCode::Up => self.selected -= if self.selected > 0 { 1 } else { 0 },
             KeyCode::PageUp => {
                 self.selected = if self.selected >= self.height {
@@ -75,16 +74,10 @@ impl term_extra::TextComponent for SongMenu {
             KeyCode::Down => self.selected += 1,
             KeyCode::Enter => {
                 if let Some(s) = indexer.get_song(self.selected) {
-                    song = Some(s);
+                    return Ok(KeyReturn::PlaySong(s));
                 }
             }
             _ => {}
-        }
-
-        if exit {
-            return Ok(KeyReturn::ExitMenu);
-        } else if let Some(song) = song {
-            return Ok(KeyReturn::PlaySong(song));
         }
 
         if self.selected < self.start_pos {
@@ -218,11 +211,13 @@ impl TextComponent for SearchField {
             KeyCode::Char(x) => self.shell.insert(x),
             KeyCode::Esc => self.shell.clear(),
             KeyCode::Enter => search = true,
+            KeyCode::Up | KeyCode::Down => return Ok(KeyReturn::Navigate),
             _ => {}
         };
         if search {
+            let rc = KeyReturn::Search(self.shell.command());
             self.shell.clear();
-            Ok(KeyReturn::Search(self.shell.command()))
+            Ok(rc)
         } else {
             Ok(KeyReturn::Nothing)
         }
