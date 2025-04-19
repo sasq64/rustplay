@@ -10,12 +10,13 @@ use std::{path::Path, thread::JoinHandle};
 use anyhow::Result;
 use crossterm::cursor::MoveToNextLine;
 use crossterm::style::SetBackgroundColor;
+use gui::KeyReturn;
 use musix::MusicError;
 
 use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
-use crate::value::*;
 use crate::{Settings, VisualizerPos};
+use crate::{term_extra, value::*};
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode, KeyModifiers},
@@ -27,9 +28,10 @@ use crossterm::{
     },
 };
 
+mod gui;
 mod indexer;
 
-use crate::term_extra::{MaybeCommand, SetReverse};
+use crate::term_extra::{MaybeCommand, SetReverse, TextComponent};
 
 use indexer::{FileInfo, RemoteIndexer};
 
@@ -131,6 +133,7 @@ impl State {
     }
 }
 
+/*
 struct Shell {
     cmd: Vec<char>,
     edit_pos: usize,
@@ -187,6 +190,7 @@ impl Shell {
         self.edit_pos = 0;
     }
 }
+*/
 
 pub(crate) struct RustPlay {
     cmd_producer: mpsc::Sender<Cmd>,
@@ -202,10 +206,11 @@ pub(crate) struct RustPlay {
     height: usize,
     log_file: File,
     no_term: bool,
-    shell: Shell,
+    //shell: Shell,
     indexer: RemoteIndexer,
+    menu_component: gui::SongMenu,
+    search_component: gui::SearchField,
 }
-
 impl RustPlay {
     pub fn new(settings: Settings) -> Result<RustPlay> {
         // Send commands to player
@@ -222,7 +227,12 @@ impl RustPlay {
         let (w, h) = terminal::size()?;
 
         let mut templ = Template::new(&settings.template, w as usize, 10)?;
-        templ.set_use_color(!settings.args.no_color);
+        let color = !settings.args.no_color;
+        templ.set_use_color(color);
+
+        let prompt_color = if color { Color::Yellow } else { Color::Reset };
+        let cursor_color = if color { Color::Yellow } else { Color::Reset };
+        let th = templ.height();
 
         Ok(RustPlay {
             cmd_producer,
@@ -247,8 +257,13 @@ impl RustPlay {
             height: h.into(),
             log_file: File::create(".rustplay.log")?,
             no_term: settings.args.no_term,
-            shell: Shell::new(),
+            //shell: Shell::new(),
             indexer: RemoteIndexer::new()?,
+            menu_component: gui::SongMenu {
+                height: h.into(),
+                ..gui::SongMenu::default()
+            },
+            search_component: gui::SearchField::new(th),
         })
     }
 
@@ -294,12 +309,11 @@ impl RustPlay {
             return Ok(());
         }
 
-        //let black_bg = self.bg_color(Color::Rgb { r: 0, g: 0, b: 0 });
-        //let cursor_bg = self.bg_color(Color::White);
-        let black_bg = SetReverse(false);
+        let black_bg = self.bg_color(Color::Rgb { r: 0, g: 0, b: 0 });
+        let normal_bg = SetReverse(false);
         let cursor_bg = SetReverse(true);
 
-        stdout().queue(black_bg)?.flush()?;
+        stdout().queue(normal_bg)?.queue(black_bg)?.flush()?;
         if self.state.changed {
             self.state.changed = false;
             stdout()
@@ -310,34 +324,10 @@ impl RustPlay {
 
         let mut out = stdout();
 
-        let (first, cursor, last) = self.shell.command_line();
-
-        out.queue(cursor::MoveTo(0, self.templ.height() as u16 + 1))?
-            .queue(Clear(ClearType::UntilNewLine))?
-            .queue(black_bg)?
-            .queue(self.fg_color(Color::Yellow))?
-            .queue(Print("> "))?
-            .queue(Print(first))?
-            .queue(cursor_bg)?
-            .queue(Print(cursor))?
-            .queue(black_bg)?
-            .queue(Print(last))?;
+        self.search_component.draw(&mut self.indexer)?;
 
         if self.state.select_mode {
-            out.queue(Clear(ClearType::All))?;
-            out.queue(cursor::MoveTo(0, 0))?;
-            let start = self.state.start_pos;
-            let songs = self.indexer.get_songs(start, start + self.height)?;
-            for (i, song) in songs.into_iter().enumerate() {
-                out.queue(if i == self.state.selected - start {
-                    &cursor_bg
-                } else {
-                    &black_bg
-                })?
-                .queue(Print(song.full_song_name()))?
-                .queue(MoveToNextLine(1))?;
-            }
-            out.flush()?;
+            self.menu_component.draw(&mut self.indexer)?;
             return Ok(());
         }
 
@@ -415,9 +405,9 @@ impl RustPlay {
         }
     }
 
-    fn search(&mut self) -> Result<()> {
-        self.indexer.search(&self.shell.command())?;
-        self.shell.clear();
+    fn search(&mut self, query: &str) -> Result<()> {
+        self.indexer.search(query)?;
+        //self.shell.clear();
         self.state.select_mode = true;
         self.state.selected = 0;
         self.state.start_pos = 0;
@@ -427,86 +417,88 @@ impl RustPlay {
     fn set_song(&mut self, song: u32) {
         self.send_cmd(move |p| p.set_song(song as i32));
     }
+    /*
+        fn handle_player_key(&mut self, key: event::KeyEvent) -> Result<()> {
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            match key.code {
+                KeyCode::Char(d) if d.is_ascii_digit() && ctrl => {
+                    self.set_song(d.to_digit(10).unwrap())
+                }
+                KeyCode::Up | KeyCode::Down => {
+                    self.state.select_mode = true;
+                    self.handle_select_key(key)?;
+                }
+                KeyCode::Char('c') if ctrl => self.state.quit = true,
+                KeyCode::Char('n') if ctrl => self.next(),
+                KeyCode::Right => self.send_cmd(Player::next_song),
+                KeyCode::Left => self.send_cmd(Player::prev_song),
+                KeyCode::Backspace => self.shell.del(),
+                KeyCode::Char(x) => self.shell.insert(x),
+                KeyCode::Esc => self.shell.clear(),
+                KeyCode::Enter => self.search(&self.shell.command())?,
+                _ => {}
+            };
+            Ok(())
+        }
 
-    fn handle_player_key(&mut self, key: event::KeyEvent) -> Result<()> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Char(d) if d.is_ascii_digit() && ctrl => {
-                self.set_song(d.to_digit(10).unwrap())
-            }
-            KeyCode::Up | KeyCode::Down => {
-                self.state.select_mode = true;
-                self.handle_select_key(key)?;
-            }
-            KeyCode::Char('c') if ctrl => self.state.quit = true,
-            KeyCode::Char('n') if ctrl => self.next(),
-            KeyCode::Right => self.send_cmd(Player::next_song),
-            KeyCode::Left => self.send_cmd(Player::prev_song),
-            KeyCode::Backspace => self.shell.del(),
-            KeyCode::Char(x) => self.shell.insert(x),
-            KeyCode::Esc => self.shell.clear(),
-            KeyCode::Enter => self.search()?,
-            _ => {}
-        };
-        Ok(())
-    }
+        fn handle_select_key(&mut self, key: event::KeyEvent) -> Result<()> {
+            let song_len = self.indexer.song_len();
+            let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+            match key.code {
+                KeyCode::Esc => {
+                    self.state.select_mode = false;
+                    self.state.changed = true;
+                }
 
-    fn handle_select_key(&mut self, key: event::KeyEvent) -> Result<()> {
-        let song_len = self.indexer.song_len();
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc => {
-                self.state.select_mode = false;
-                self.state.changed = true;
+                KeyCode::Char('c') if ctrl => self.state.quit = true,
+                KeyCode::Char('n') if ctrl => self.next(),
+                KeyCode::Char(_) => {
+                    self.state.select_mode = false;
+                    self.state.changed = true;
+                    self.handle_player_key(key)?;
+                }
+                KeyCode::Up => self.state.selected -= if self.state.selected > 0 { 1 } else { 0 },
+                KeyCode::PageUp => {
+                    self.state.selected = if self.state.selected >= self.height {
+                        self.state.selected - self.height
+                    } else {
+                        0
+                    }
+                }
+                KeyCode::PageDown => self.state.selected += self.height,
+                KeyCode::Down => self.state.selected += 1,
+                KeyCode::Left => self.send_cmd(Player::prev_song),
+                KeyCode::Enter => {
+                    if let Some(song) = self.indexer.get_song(self.state.selected) {
+                        self.play_song(&song);
+                    }
+                    self.state.changed = true;
+                    self.state.select_mode = false;
+                }
+                _ => {}
             }
 
-            KeyCode::Char('c') if ctrl => self.state.quit = true,
-            KeyCode::Char('n') if ctrl => self.next(),
-            KeyCode::Char(_) => {
-                self.state.select_mode = false;
-                self.state.changed = true;
-                self.handle_player_key(key)?;
-            }
-            KeyCode::Up => self.state.selected -= if self.state.selected > 0 { 1 } else { 0 },
-            KeyCode::PageUp => {
-                self.state.selected = if self.state.selected >= self.height {
-                    self.state.selected - self.height
+            if self.state.selected < self.state.start_pos {
+                self.state.start_pos = if self.state.start_pos >= self.height {
+                    self.state.start_pos - self.height
                 } else {
                     0
                 }
+            } else if self.state.selected >= self.state.start_pos + self.height {
+                self.state.start_pos += self.height
             }
-            KeyCode::PageDown => self.state.selected += self.height,
-            KeyCode::Down => self.state.selected += 1,
-            KeyCode::Left => self.send_cmd(Player::prev_song),
-            KeyCode::Enter => {
-                if let Some(song) = self.indexer.get_song(self.state.selected) {
-                    self.play_song(&song);
-                }
-                self.state.changed = true;
-                self.state.select_mode = false;
+
+            if self.state.selected + 1 >= song_len {
+                self.state.selected = song_len - 1;
             }
-            _ => {}
-        }
-
-        if self.state.selected < self.state.start_pos {
-            self.state.start_pos = if self.state.start_pos >= self.height {
-                self.state.start_pos - self.height
-            } else {
-                0
+            if song_len <= self.height {
+                self.state.start_pos = 0;
+            } else if self.state.start_pos + self.height > song_len {
+                self.state.start_pos = song_len - self.height;
             }
-        } else if self.state.selected >= self.state.start_pos + self.height {
-            self.state.start_pos += self.height
+            Ok(())
         }
-
-        if self.state.selected + 1 >= song_len {
-            self.state.selected = song_len - 1;
-        }
-        //if self.state.start_pos + self.height > song_len {
-        //    self.state.start_pos = song_len - self.height;
-        //}
-        Ok(())
-    }
-
+    */
     pub fn handle_keys(&mut self) -> Result<bool> {
         if self.no_term {
             return Ok(false);
@@ -517,10 +509,49 @@ impl RustPlay {
         }
         if let Event::Key(key) = event::read()? {
             if key.kind == event::KeyEventKind::Press {
+                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                match key.code {
+                    KeyCode::Char(d) if d.is_ascii_digit() && ctrl => {
+                        self.set_song(d.to_digit(10).unwrap())
+                    }
+                    // KeyCode::Up | KeyCode::Down => {
+                    //     self.state.select_mode = true;
+                    //     self.handle_select_key(key)?;
+                    // }
+                    KeyCode::Char('c') if ctrl => self.state.quit = true,
+                    KeyCode::Char('n') if ctrl => self.next(),
+                    KeyCode::Right => self.send_cmd(Player::next_song),
+                    KeyCode::Left => self.send_cmd(Player::prev_song),
+                    _ => {}
+                }
                 if self.state.select_mode {
-                    self.handle_select_key(key)?;
+                    match self.menu_component.handle_key(&mut self.indexer, key)? {
+                        KeyReturn::PlaySong(song) => {
+                            self.play_song(&song);
+                            self.state.changed = true;
+                            self.state.select_mode = false;
+                        }
+                        KeyReturn::ExitMenu => {
+                            self.state.changed = true;
+                            self.state.select_mode = false;
+                        }
+                        _ => {}
+                    }
+
+                    //self.handle_select_key(key)?;
                 } else {
-                    self.handle_player_key(key)?;
+                    match self.search_component.handle_key(&mut self.indexer, key)? {
+                        KeyReturn::Search(query) => {
+                            self.search(&query)?;
+                            self.state.select_mode = true;
+                        }
+                        KeyReturn::ExitMenu => {
+                            self.state.changed = true;
+                            self.state.select_mode = false;
+                        }
+                        _ => {}
+                    }
+                    //self.handle_player_key(key)?;
                 }
             }
         }

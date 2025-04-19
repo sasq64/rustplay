@@ -276,8 +276,9 @@ impl Indexer {
 
     pub fn search(&mut self, query: &str) -> Result<()> {
         let searcher = self.reader.searcher();
-        let query_parser =
+        let mut query_parser =
             QueryParser::for_index(&self.index, vec![self.title_field, self.composer_field]);
+        query_parser.set_conjunction_by_default();
         let query = query_parser.parse_query(query)?;
         let top_docs = searcher.search(&query, &TopDocs::with_limit(10000))?;
 

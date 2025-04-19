@@ -1,6 +1,6 @@
+use anyhow::Result;
 use core::fmt;
-
-use crossterm::Command;
+use crossterm::{Command, event::KeyEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetReverse(pub bool);
@@ -29,4 +29,11 @@ impl<T: Command> Command for MaybeCommand<T> {
             Ok(())
         }
     }
+}
+
+pub trait TextComponent<T = ()> {
+    type UiState;
+    type Return;
+    fn handle_key(&mut self, _state: &mut Self::UiState, _key: KeyEvent) -> Result<Self::Return>;
+    fn draw(&self, state: &mut Self::UiState) -> Result<()>;
 }
