@@ -30,7 +30,7 @@ use crossterm::{
 mod gui;
 mod indexer;
 
-use crate::term_extra::{MaybeCommand, SetReverse, TextComponent};
+use crate::term_extra::{MaybeCommand, SetReverse};
 
 use indexer::{FileInfo, RemoteIndexer};
 
@@ -44,8 +44,6 @@ struct State {
     done: bool,
     show_error: i32,
     select_mode: bool,
-    selected: usize,
-    start_pos: usize,
     quit: bool,
     use_color: bool,
     errors: VecDeque<String>,
@@ -137,10 +135,8 @@ pub(crate) struct RustPlay {
     info_consumer: mpsc::Receiver<(String, Value)>,
     templ: Template,
     msec: Arc<AtomicUsize>,
-    data: Vec<f32>,
     player_thread: Option<JoinHandle<()>>,
     fft_pos: VisualizerPos,
-    fft_height: usize,
     errors: VecDeque<String>,
     state: State,
     height: usize,
@@ -149,6 +145,7 @@ pub(crate) struct RustPlay {
     indexer: RemoteIndexer,
     menu_component: gui::SongMenu,
     search_component: gui::SearchField,
+    fft_component: gui::Fft,
 }
 impl RustPlay {
     pub fn new(settings: Settings) -> Result<RustPlay> {
@@ -166,17 +163,21 @@ impl RustPlay {
         let (w, h) = terminal::size()?;
 
         let mut templ = Template::new(&settings.template, w as usize, 10)?;
-        let color = !settings.args.no_color;
-        templ.set_use_color(color);
+        let use_color = !settings.args.no_color;
+        templ.set_use_color(use_color);
 
         let th = templ.height();
+        let (x, y) = if settings.args.visualizer == VisualizerPos::Right {
+            (73, 0)
+        } else {
+            (1, 9)
+        };
 
         Ok(RustPlay {
             cmd_producer,
             info_consumer,
             templ,
             msec: msec.clone(),
-            data: Vec::new(),
             player_thread: Some(crate::player::run_player(
                 &settings.args,
                 info_producer,
@@ -184,7 +185,6 @@ impl RustPlay {
                 msec,
             )?),
             fft_pos: settings.args.visualizer,
-            fft_height: settings.args.visualizer_height,
             errors: VecDeque::new(),
             state: State {
                 changed: true,
@@ -200,6 +200,13 @@ impl RustPlay {
                 ..gui::SongMenu::default()
             },
             search_component: gui::SearchField::new(th),
+            fft_component: gui::Fft {
+                data: Vec::new(),
+                use_color,
+                x,
+                y,
+                height: settings.args.visualizer_height as i32,
+            },
         })
     }
 
@@ -248,7 +255,9 @@ impl RustPlay {
         let black_bg = self.bg_color(Color::Rgb { r: 0, g: 0, b: 0 });
         let normal_bg = SetReverse(false);
 
-        stdout().queue(normal_bg)?.queue(black_bg)?.flush()?;
+        let mut out = stdout();
+
+        out.queue(normal_bg)?.queue(black_bg)?.flush()?;
         if self.state.changed {
             self.state.changed = false;
             stdout()
@@ -257,14 +266,12 @@ impl RustPlay {
             self.templ.write(&self.state.meta, 0, 0)?;
         }
 
-        let mut out = stdout();
-
-        self.search_component.draw(&mut self.indexer)?;
 
         if self.state.select_mode {
             self.menu_component.draw(&mut self.indexer)?;
             return Ok(());
         }
+        self.search_component.draw()?;
 
         if let Some((x, y)) = self.templ.get_pos("count") {
             out.queue(cursor::MoveTo(x, y))?
@@ -273,40 +280,10 @@ impl RustPlay {
         }
 
         if self.fft_pos != VisualizerPos::None {
-            let (x, y) = if self.fft_pos == VisualizerPos::Right {
-                (73, 0)
-            } else {
-                (1, 9)
-            };
-            let use_color = true;
             if let Some(Value::Data(data)) = self.state.meta.get("fft") {
-                if self.data.len() != data.len() {
-                    self.data.resize(data.len(), 0.0);
-                }
-                data.iter().zip(self.data.iter_mut()).for_each(|(a, b)| {
-                    let d = *a as f32;
-                    *b = if *b < d { d } else { *b * 0.75 + d * 0.25 }
-                });
-                let w = data.len() * 3;
-                let h = self.fft_height;
-                let mut area: Vec<char> = vec![' '; w * h];
-                print_bars(&self.data, &mut area, w, h);
-                out.queue(self.fg_color(Color::DarkBlue))?;
-                for i in 0..h {
-                    out.queue(cursor::MoveTo(x, y + i as u16))?;
-                    if use_color {
-                        let col: u8 = ((i * 255) / h) as u8;
-                        out.queue(self.fg_color(Color::Rgb {
-                            r: 250 - col,
-                            g: col,
-                            b: 0x40,
-                        }))?;
-                    }
-                    let offset = i * w;
-                    let line: String = area[offset..(offset + w)].iter().collect();
-                    out.queue(Print(line))?;
-                }
+                self.fft_component.update(data);
             }
+            self.fft_component.draw()?;
         }
 
         if self.state.show_error > 0 {
@@ -343,10 +320,7 @@ impl RustPlay {
     fn search(&mut self, query: &str) -> Result<()> {
         self.log(&format!("Searching for {}", query))?;
         self.indexer.search(query)?;
-        //self.shell.clear();
         self.state.select_mode = true;
-        self.state.selected = 0;
-        self.state.start_pos = 0;
         Ok(())
     }
 
@@ -389,15 +363,17 @@ impl RustPlay {
                         KeyReturn::Navigate => {
                             self.state.changed = true;
                             self.state.select_mode = false;
-                            self.search_component.handle_key(&mut self.indexer, key)?;
+                            self.search_component.handle_key(key)?;
                         }
                         _ => {}
                     }
                 } else {
-                    match self.search_component.handle_key(&mut self.indexer, key)? {
+                    match self.search_component.handle_key(key)? {
                         KeyReturn::Search(query) => {
                             self.search(&query)?;
                             self.state.select_mode = true;
+                            self.menu_component.start_pos = 0;
+                            self.menu_component.selected = 0;
                         }
                         KeyReturn::ExitMenu => {
                             self.state.changed = true;
@@ -469,19 +445,6 @@ impl RustPlay {
             }
         }
         Ok(())
-    }
-}
-
-fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
-    const C: [char; 9] = ['█', '▇', '▆', '▅', '▄', '▃', '▂', '▁', ' '];
-    for x in 0..bars.len() {
-        let n = (bars[x] * (h as f32 / 5.0)) as i32;
-        for y in 0..h {
-            let bar_char = C[(((h - y) * 8) as i32 - n).clamp(0, 8) as usize];
-            target[x * 3 + y * w] = bar_char;
-            target[x * 3 + 1 + y * w] = bar_char;
-            target[x * 3 + 2 + y * w] = ' ';
-        }
     }
 }
 

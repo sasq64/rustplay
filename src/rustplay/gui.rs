@@ -1,5 +1,5 @@
 use super::indexer::{FileInfo, RemoteIndexer};
-use crate::term_extra::{self, SetReverse, TextComponent};
+use crate::term_extra::SetReverse;
 use anyhow::Result;
 use crossterm::{
     QueueableCommand,
@@ -28,11 +28,8 @@ pub struct SongMenu {
     pub height: usize,
 }
 
-impl term_extra::TextComponent for SongMenu {
-    type UiState = RemoteIndexer;
-    type Return = KeyReturn;
-
-    fn draw(&self, indexer: &mut RemoteIndexer) -> Result<()> {
+impl SongMenu {
+    pub fn draw(&self, indexer: &mut RemoteIndexer) -> Result<()> {
         let mut out = stdout();
         let normal_bg = SetReverse(false);
         let cursor_bg = SetReverse(true);
@@ -53,7 +50,7 @@ impl term_extra::TextComponent for SongMenu {
         Ok(())
     }
 
-    fn handle_key(
+    pub fn handle_key(
         &mut self,
         indexer: &mut RemoteIndexer,
         key: event::KeyEvent,
@@ -181,11 +178,8 @@ impl SearchField {
     }
 }
 
-impl TextComponent for SearchField {
-    type UiState = RemoteIndexer;
-    type Return = KeyReturn;
-
-    fn draw(&self, _: &mut RemoteIndexer) -> Result<()> {
+impl SearchField {
+    pub fn draw(&self) -> Result<()> {
         let mut out = stdout();
 
         let (first, cursor, last) = self.shell.command_line();
@@ -204,7 +198,7 @@ impl TextComponent for SearchField {
         Ok(())
     }
 
-    fn handle_key(&mut self, _: &mut RemoteIndexer, key: event::KeyEvent) -> Result<KeyReturn> {
+    pub fn handle_key(&mut self, key: event::KeyEvent) -> Result<KeyReturn> {
         let mut search = false;
         match key.code {
             KeyCode::Backspace => self.shell.del(),
@@ -221,5 +215,62 @@ impl TextComponent for SearchField {
         } else {
             Ok(KeyReturn::Nothing)
         }
+    }
+}
+
+#[derive(Default)]
+pub struct Fft {
+    pub data: Vec<f32>,
+    pub height: i32,
+    pub use_color: bool,
+    pub x: u16,
+    pub y: u16,
+}
+
+impl Fft {
+    fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
+        const C: [char; 9] = ['█', '▇', '▆', '▅', '▄', '▃', '▂', '▁', ' '];
+        for x in 0..bars.len() {
+            let n = (bars[x] * (h as f32 / 5.0)) as i32;
+            for y in 0..h {
+                let bar_char = C[(((h - y) * 8) as i32 - n).clamp(0, 8) as usize];
+                target[x * 3 + y * w] = bar_char;
+                target[x * 3 + 1 + y * w] = bar_char;
+                target[x * 3 + 2 + y * w] = ' ';
+            }
+        }
+    }
+
+    pub fn update(&mut self, data: &[u8]) {
+        if self.data.len() != data.len() {
+            self.data.resize(data.len(), 0.0);
+        }
+        data.iter().zip(self.data.iter_mut()).for_each(|(a, b)| {
+            let d = *a as f32;
+            *b = if *b < d { d } else { *b * 0.75 + d * 0.25 }
+        });
+    }
+
+    pub fn draw(&self) -> Result<()> {
+        let w = self.data.len() * 3;
+        let h = self.height as usize;
+        let mut area: Vec<char> = vec![' '; w * h];
+        Fft::print_bars(&self.data, &mut area, w, h);
+        let mut out = stdout();
+        for i in 0..h {
+            out.queue(cursor::MoveTo(self.x, self.y + i as u16))?;
+            if self.use_color {
+                let col: u8 = ((i * 255) / h) as u8;
+                out.queue(SetForegroundColor(Color::Rgb {
+                    r: 250 - col,
+                    g: col,
+                    b: 0x40,
+                }))?;
+            }
+            let offset = i * w;
+            let line: String = area[offset..(offset + w)].iter().collect();
+            out.queue(Print(line))?;
+        }
+        Ok(())
     }
 }
