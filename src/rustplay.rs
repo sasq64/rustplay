@@ -163,6 +163,7 @@ impl RustPlay {
         let (w, h) = terminal::size()?;
 
         let mut templ = Template::new(&settings.template, w as usize, 10)?;
+        templ.set_vars(settings.variables);
         let use_color = !settings.args.no_color;
         templ.set_use_color(use_color);
 

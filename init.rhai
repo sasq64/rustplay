@@ -16,6 +16,10 @@ template(`
 @TEXT=:#20e020
 `);
 
+
+add_alias("b", "song");
+add_alias("a", "isong");
+add_alias("count", 0x808080);
 // add_alias("full_name", |meta| meta.title + " / " + meta.composer)
 
 fn title_and_composer(meta) {

@@ -23,6 +23,7 @@ pub struct Template {
     templ: Vec<String>,
     use_color: bool,
     data: HashMap<String, PlaceHolder>,
+
 }
 
 fn color(color: u32) -> Color {
@@ -253,6 +254,10 @@ impl Template {
             use_color: false,
             data,
         })
+    }
+
+    pub fn set_vars(&mut self, variables: HashMap<String, crate::TemplateVar>) {
+        //self.variables = variables;
     }
 }
 

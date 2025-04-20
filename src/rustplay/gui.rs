@@ -87,13 +87,15 @@ impl SongMenu {
             self.start_pos += self.height
         }
 
-        if self.selected + 1 >= song_len {
-            self.selected = song_len - 1;
-        }
-        if song_len <= self.height {
-            self.start_pos = 0;
-        } else if self.start_pos + self.height > song_len {
-            self.start_pos = song_len - self.height;
+        if song_len > 0 {
+            if self.selected + 1 >= song_len {
+                self.selected = song_len - 1;
+            }
+            if song_len <= self.height {
+                self.start_pos = 0;
+            } else if self.start_pos + self.height > song_len {
+                self.start_pos = song_len - self.height;
+            }
         }
         Ok(KeyReturn::Nothing)
     }

@@ -1,7 +1,10 @@
 #![allow(dead_code)]
 
 //! rustplay main file
-use std::{cell::RefCell, error::Error, panic, path::PathBuf, process, rc::Rc, time::Duration};
+use std::{
+    cell::RefCell, collections::HashMap, error::Error, panic, path::PathBuf, process, rc::Rc,
+    time::Duration,
+};
 
 mod player;
 mod rustplay;
@@ -9,6 +12,7 @@ mod templ;
 mod term_extra;
 mod value;
 
+use rhai::FnPtr;
 use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
@@ -59,11 +63,19 @@ struct Args {
     no_color: bool,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug, Default)]
+struct TemplateVar {
+    color: Option<u32>,
+    alias: Option<String>,
+    code: Option<FnPtr>
+}
+
+#[derive(Clone, Debug, Default)]
 struct Settings {
     args: Args,
     template: String,
     width: i32,
+    variables: HashMap<String, TemplateVar>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -72,8 +84,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Needs to be modified by RHAI => RefCell (could be Cell)
     let settings = Rc::new(RefCell::new(Settings {
         args: Args::parse(),
-        template: String::new(),
         width: -1,
+        ..Settings::default()
     }));
 
     let mut rhai_engine = rhai::Engine::new();
@@ -82,6 +94,50 @@ fn main() -> Result<(), Box<dyn Error>> {
         let settings = settings.clone();
         move |t: &str| t.clone_into(&mut settings.borrow_mut().template)
     });
+
+    rhai_engine
+        .register_fn("add_alias", {
+            let settings = settings.clone();
+            move |name: &str, alias: &str| {
+                let v = TemplateVar {
+                    alias: Some(alias.to_owned()),
+                    ..TemplateVar::default()
+                };
+                settings.borrow_mut().variables.insert(name.to_owned(), v);
+            }
+        })
+        .register_fn("add_alias", {
+            let settings = settings.clone();
+            move |name: &str, color: i64| {
+                let v = TemplateVar {
+                    color: Some(color as u32),
+                    ..TemplateVar::default()
+                };
+                settings.borrow_mut().variables.insert(name.to_owned(), v);
+            }
+        })
+        .register_fn("add_alias", {
+            let settings = settings.clone();
+            move |name: &str, alias: &str, color: i64| {
+                let v = TemplateVar {
+                    color: Some(color as u32),
+                    alias: Some(alias.to_owned()),
+                    ..TemplateVar::default()
+                };
+                settings.borrow_mut().variables.insert(name.to_owned(), v);
+            }
+        })
+        .register_fn("add_alias", {
+            let settings = settings.clone();
+            move |name: &str, code: FnPtr| {
+                let v = TemplateVar {
+                    code: Some(code),
+                    ..TemplateVar::default()
+                };
+                settings.borrow_mut().variables.insert(name.to_owned(), v);
+            }
+        });
+
 
     let p = PathBuf::from("init.rhai");
     if p.is_file() {
