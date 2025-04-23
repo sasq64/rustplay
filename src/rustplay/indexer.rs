@@ -22,6 +22,9 @@ use walkdir::WalkDir;
 
 use crate::value::Value;
 
+use super::song::{FileInfo, SongArray, SongCollection};
+
+
 #[inline]
 /// Convert 8 bit unicode to utf8 String
 fn slice_to_string(slice: &[u8]) -> String {
@@ -30,48 +33,6 @@ fn slice_to_string(slice: &[u8]) -> String {
         .take_while(|&&b| b != 0)
         .map(|&b| b as char)
         .collect()
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct FileInfo {
-    path: PathBuf,
-    pub meta_data: HashMap<String, Value>,
-}
-
-impl FileInfo {
-    pub fn path(&self) -> &Path {
-        &self.path
-    }
-
-    pub fn get(&self, what: &str) -> &Value {
-        self.meta_data.get(what).unwrap_or(&Value::Unknown())
-    }
-
-    pub fn title_and_composer(&self) -> String {
-        let title = self.get("title");
-        let composer = self.get("composer");
-        format!("{title} / {composer}")
-    }
-
-    pub fn full_song_name(&self) -> String {
-        let title = self.get("title");
-        let composer = self.get("composer");
-        let file_name = self.path.file_name().map(|s| s.to_string_lossy());
-        if title != &Value::Unknown() {
-            return format!("{title} / {composer}");
-        }
-        if let Some(file_name) = file_name {
-            return file_name.to_string();
-        }
-        "???".into()
-    }
-
-    pub fn title(&self) -> Option<&str> {
-        if let Some(Value::Text(title)) = self.meta_data.get("title") {
-            return Some(title);
-        }
-        None
-    }
 }
 
 pub trait PlayList {
@@ -83,7 +44,7 @@ pub struct Indexer {
     index: Index,
     index_writer: IndexWriter,
     reader: IndexReader,
-    pub result: Vec<FileInfo>,
+    result: Vec<FileInfo>,
 
     title_field: Field,
     composer_field: Field,
@@ -427,6 +388,12 @@ impl RemoteIndexer {
     pub fn song_len(&self) -> usize {
         let indexer = self.lock();
         indexer.result.len()
+    }
+
+    pub fn get_song_result(&self) -> Option<Box<dyn SongCollection>> {
+
+        let result = self.lock().result.clone();
+        Some(Box::new(SongArray { songs: result }))
     }
 }
 

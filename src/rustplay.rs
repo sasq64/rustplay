@@ -1,7 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::fs::File;
-use std::io::Write as _;
-use std::io::{self, stdout};
+use std::io::{self, Write as _, stdout};
 use std::panic;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -14,25 +12,27 @@ use musix::MusicError;
 
 use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
-use crate::value::*;
 use crate::{Settings, VisualizerPos};
+use crate::{log, value::*};
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode, KeyModifiers},
     style::{Color, Print, SetForegroundColor},
     terminal,
     terminal::{
-        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode,
-        enable_raw_mode,
+        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
     },
 };
 
 mod gui;
 mod indexer;
+mod song;
 
 use crate::term_extra::{MaybeCommand, SetReverse};
 
-use indexer::{FileInfo, RemoteIndexer};
+use song::{FileInfo, SongCollection};
+
+use indexer::RemoteIndexer;
 
 #[derive(Default)]
 struct State {
@@ -40,7 +40,7 @@ struct State {
     meta: HashMap<String, Value>,
     song: i32,
     songs: i32,
-    length: i32,
+    len_msec: usize,
     done: bool,
     show_error: i32,
     select_mode: bool,
@@ -140,12 +140,13 @@ pub(crate) struct RustPlay {
     errors: VecDeque<String>,
     state: State,
     height: usize,
-    log_file: File,
     no_term: bool,
     indexer: RemoteIndexer,
     menu_component: gui::SongMenu,
     search_component: gui::SearchField,
     fft_component: gui::Fft,
+    current_list: Option<Box<dyn SongCollection>>,
+    current_song: usize,
 }
 impl RustPlay {
     pub fn new(settings: Settings) -> Result<RustPlay> {
@@ -193,7 +194,6 @@ impl RustPlay {
                 ..State::default()
             },
             height: h.into(),
-            log_file: File::create(".rustplay.log")?,
             no_term: settings.args.no_term,
             indexer: RemoteIndexer::new()?,
             menu_component: gui::SongMenu {
@@ -208,16 +208,13 @@ impl RustPlay {
                 y,
                 height: settings.args.visualizer_height as i32,
             },
+            current_list: None,
+            current_song: 0,
         })
     }
 
-    fn log(&mut self, text: &str) -> io::Result<()> {
-        writeln!(self.log_file, "{}", text)?;
-        self.log_file.flush()
-    }
-
     fn setup_term() -> io::Result<()> {
-        enable_raw_mode()?;
+        terminal::enable_raw_mode()?;
         stdout()
             .queue(EnterAlternateScreen)?
             .queue(cursor::Hide)?
@@ -229,7 +226,7 @@ impl RustPlay {
             .queue(LeaveAlternateScreen)?
             .queue(cursor::Show)?
             .flush()?;
-        disable_raw_mode()
+        terminal::disable_raw_mode()
     }
 
     fn bg_color(&self, color: Color) -> MaybeCommand<SetBackgroundColor> {
@@ -249,6 +246,11 @@ impl RustPlay {
     }
 
     pub fn draw_screen(&mut self) -> Result<()> {
+        let play_time = self.msec.load(Ordering::SeqCst);
+        if self.state.len_msec > 0 && play_time > self.state.len_msec {
+            self.next();
+        }
+
         if self.no_term {
             return Ok(());
         }
@@ -266,7 +268,6 @@ impl RustPlay {
                 .queue(self.fg_color(Color::Cyan))?;
             self.templ.write(&self.state.meta, 0, 0)?;
         }
-
 
         if self.state.select_mode {
             self.menu_component.draw(&mut self.indexer)?;
@@ -319,7 +320,7 @@ impl RustPlay {
     }
 
     fn search(&mut self, query: &str) -> Result<()> {
-        self.log(&format!("Searching for {}", query))?;
+        log!("Searching for {}", query);
         self.indexer.search(query)?;
         self.state.select_mode = true;
         Ok(())
@@ -340,52 +341,61 @@ impl RustPlay {
         if let Event::Key(key) = event::read()? {
             if key.kind == event::KeyEventKind::Press {
                 let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                let mut handled = true;
                 match key.code {
                     KeyCode::Char(d) if d.is_ascii_digit() && ctrl => {
                         self.set_song(d.to_digit(10).unwrap())
                     }
                     KeyCode::Char('c') if ctrl => self.state.quit = true,
                     KeyCode::Char('n') if ctrl => self.next(),
+                    KeyCode::Char('p') if ctrl => self.prev(),
+                    KeyCode::Char('f') => self.send_cmd(|p| p.ff(10000)),
                     KeyCode::Right => self.send_cmd(Player::next_song),
                     KeyCode::Left => self.send_cmd(Player::prev_song),
-                    _ => {}
+                    _ => handled = false,
                 }
-                if self.state.select_mode {
-                    match self.menu_component.handle_key(&mut self.indexer, key)? {
-                        KeyReturn::PlaySong(song) => {
-                            self.play_song(&song);
-                            self.state.changed = true;
-                            self.state.select_mode = false;
+                if !handled {
+                    if self.state.select_mode {
+                        match self.menu_component.handle_key(&mut self.indexer, key)? {
+                            KeyReturn::PlaySong(song) => {
+                                self.current_list = self.indexer.get_song_result();
+                                if let Some(cl) = &self.current_list {
+                                    self.current_song = cl.index_of(&song).unwrap_or(0);
+                                }
+                                self.play_song(&song);
+                                self.state.changed = true;
+                                self.state.select_mode = false;
+                            }
+                            KeyReturn::ExitMenu => {
+                                self.state.changed = true;
+                                self.state.select_mode = false;
+                            }
+                            KeyReturn::Navigate => {
+                                self.state.changed = true;
+                                self.state.select_mode = false;
+                                self.search_component.handle_key(key)?;
+                            }
+                            _ => {}
                         }
-                        KeyReturn::ExitMenu => {
-                            self.state.changed = true;
-                            self.state.select_mode = false;
+                    } else {
+                        match self.search_component.handle_key(key)? {
+                            KeyReturn::Search(query) => {
+                                self.search(&query)?;
+                                self.state.select_mode = true;
+                                self.menu_component.start_pos = 0;
+                                self.menu_component.selected = 0;
+                            }
+                            KeyReturn::ExitMenu => {
+                                self.state.changed = true;
+                                self.state.select_mode = true;
+                            }
+                            KeyReturn::Navigate => {
+                                self.state.changed = true;
+                                self.state.select_mode = true;
+                                self.menu_component.handle_key(&mut self.indexer, key)?;
+                            }
+                            _ => {}
                         }
-                        KeyReturn::Navigate => {
-                            self.state.changed = true;
-                            self.state.select_mode = false;
-                            self.search_component.handle_key(key)?;
-                        }
-                        _ => {}
-                    }
-                } else {
-                    match self.search_component.handle_key(key)? {
-                        KeyReturn::Search(query) => {
-                            self.search(&query)?;
-                            self.state.select_mode = true;
-                            self.menu_component.start_pos = 0;
-                            self.menu_component.selected = 0;
-                        }
-                        KeyReturn::ExitMenu => {
-                            self.state.changed = true;
-                            self.state.select_mode = true;
-                        }
-                        KeyReturn::Navigate => {
-                            self.state.changed = true;
-                            self.state.select_mode = true;
-                            self.menu_component.handle_key(&mut self.indexer, key)?;
-                        }
-                        _ => {}
                     }
                 }
             }
@@ -393,18 +403,50 @@ impl RustPlay {
         Ok(self.state.quit)
     }
 
+    fn get_song(&self, n: usize) -> Option<FileInfo> {
+        if let Some(cl) = &self.current_list {
+            if n < cl.len() {
+                return Some(cl[n].clone());
+            }
+        }
+        None
+    }
+
     pub fn play_song(&mut self, song: &FileInfo) {
         self.state.clear_meta();
         for (name, val) in song.meta_data.iter() {
-            self.log(&format!("INDEX-META {name} = {val}")).unwrap();
+            log!("INDEX-META {name} = {val}");
             self.state.update_meta(name, val.clone());
         }
+        if let Some(next_song) = self.get_song(self.current_song + 1) {
+            self.state
+                .update_meta("next_song", Value::Text(next_song.full_song_name()));
+        }
+
         self.state.update_title();
         let path = song.path().to_owned();
         self.send_cmd(move |p| p.load(&path));
     }
 
+    pub fn prev(&mut self) {
+        if let Some(cl) = &self.current_list {
+            if self.current_song > 1 {
+                self.current_song -= 1;
+            }
+            let song = cl[self.current_song].clone();
+            self.play_song(&song);
+        }
+    }
     pub fn next(&mut self) {
+        if let Some(cl) = &self.current_list {
+            if (self.current_song + 1) < cl.len() {
+                self.current_song += 1;
+            }
+            let song = cl[self.current_song].clone();
+            self.play_song(&song);
+            return;
+        }
+
         if let Some(song) = self.indexer.next() {
             self.play_song(&song);
         }
@@ -417,10 +459,15 @@ impl RustPlay {
         }
         while let Ok((meta, val)) = self.info_consumer.try_recv() {
             if meta != "fft" {
-                self.log(&format!("SONG-META {} = {}", meta, val)).unwrap();
+                log!("SONG-META {} = {}", meta, val);
             }
             self.state.update_meta(&meta, val);
         }
+
+        if let Some(Value::Number(len)) = self.state.meta.get("length") {
+            self.state.len_msec = (len * 1000.0) as usize;
+        }
+
         self.state.update_title();
     }
 
@@ -451,6 +498,8 @@ impl RustPlay {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::RustPlay;
     use crate::Args;
     use crate::Settings;
@@ -464,6 +513,7 @@ mod tests {
             },
             template: "".into(),
             width: 10,
+            variables: HashMap::new(),
         };
         let mut rp = RustPlay::new(settings).unwrap();
         rp.quit().unwrap();

@@ -46,6 +46,7 @@ pub(crate) struct Player {
     millis: Arc<AtomicUsize>,
     playing: bool,
     quitting: bool,
+    ff_msec: usize,
     new_song: Option<PathBuf>,
 }
 
@@ -93,6 +94,11 @@ impl Player {
         self.reset();
         self.new_song = Some(name.to_owned());
         self.playing = true;
+        Ok(true)
+    }
+
+    pub fn ff(&mut self, msec: usize) -> PlayResult {
+        self.ff_msec += msec;
         Ok(true)
     }
 
@@ -199,6 +205,7 @@ pub(crate) fn run_player(
     let fft_div = args.fft_div * 2;
 
     let msec_outside = msec.clone();
+    let msec_skip = msec.clone();
 
     Ok(thread::spawn(move || {
         let main = move || -> Result<()> {
@@ -207,7 +214,8 @@ pub(crate) fn run_player(
 
             let stream = device.build_output_stream(
                 &config.into(),
-                move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
+                move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                    //info.timestamp().playback.duration_since(last_ts);
                     audio_faucet.pop_slice(data);
                     let ms = data.len() * 1000 / (44100 * 2);
                     msec.fetch_add(ms, Ordering::SeqCst);
@@ -236,7 +244,19 @@ pub(crate) fn run_player(
                 player.update_meta(&mut info_producer)?;
 
                 if let Some(chip_player) = &mut player.chip_player {
-                    if audio_sink.vacant_len() > target.len() {
+                    if player.ff_msec > 0 {
+                        let rc = chip_player.get_samples(&mut target);
+                        let ms = target.len() * 1000 / (44100 * 2);
+                        if ms > player.ff_msec {
+                            player.ff_msec = 0;
+                        } else {
+                            player.ff_msec -= ms;
+                        }
+                        msec_skip.fetch_add(ms, Ordering::SeqCst);
+                        if rc == 0 {
+                            info_producer.push_value("done", 0)?;
+                        }
+                    } else if audio_sink.vacant_len() > target.len() {
                         let rc = chip_player.get_samples(&mut target);
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;

@@ -1,4 +1,4 @@
-use super::indexer::{FileInfo, RemoteIndexer};
+use super::{indexer::RemoteIndexer, song::FileInfo};
 use crate::term_extra::SetReverse;
 use anyhow::Result;
 use crossterm::{

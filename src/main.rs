@@ -2,8 +2,8 @@
 
 //! rustplay main file
 use std::{
-    cell::RefCell, collections::HashMap, error::Error, panic, path::PathBuf, process, rc::Rc,
-    time::Duration,
+    io::Write,
+    cell::RefCell, collections::HashMap, error::Error, fs::{File, OpenOptions}, panic, path::PathBuf, process, rc::Rc, sync::{LazyLock, Mutex}, time::Duration
 };
 
 mod player;
@@ -16,6 +16,28 @@ use rhai::FnPtr;
 use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
+
+pub fn log(text: &str, file_name: &str, line: u32) {
+
+   static LOG_FILE: LazyLock<Mutex<File>> = LazyLock::new(|| {
+        let file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(".rustplay.log")
+            .expect("Failed to open log file");
+        Mutex::new(file)
+    });
+    let mut log_file = LOG_FILE.lock().unwrap();
+    writeln!(log_file, "[{file_name}:{line}] {}", text).unwrap();
+    log_file.flush().unwrap();
+}
+
+#[macro_export]
+macro_rules! log {
+    ($($arg:tt)*) => {{
+        $crate::log(&format!($($arg)*), file!(), line!());
+    }};
+}
 
 #[derive(Default, ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum VisualizerPos {
@@ -68,6 +90,10 @@ struct TemplateVar {
     color: Option<u32>,
     alias: Option<String>,
     code: Option<FnPtr>
+}
+
+trait DynamicVar {
+    fn generate(&self) -> String;
 }
 
 #[derive(Clone, Debug, Default)]
