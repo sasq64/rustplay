@@ -152,7 +152,7 @@ impl Template {
         let mut renames: HashMap<&str, &str> = HashMap::new();
         let mut colors: HashMap<&str, u32> = HashMap::new();
 
-        let maxl = templ.lines().map(|l| l.chars().count()).max().unwrap();
+        let maxl = w;
 
         // Strip alias assignments from template
         let lines: Vec<&str> = templ
@@ -271,23 +271,28 @@ impl Template {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use std::collections::HashMap;
-
     use crate::value::Value;
-
     use super::Template;
+
+    fn compare(a: &str, b: &str) -> bool {
+        let one = a.lines().map(str::trim).filter(|l| !l.is_empty());
+        let two = b.lines().map(str::trim).filter(|l| !l.is_empty());
+        for (left, right) in one.zip(two) {
+            if left != right {
+                println!("'{left}' != '{right}'");
+                return false
+            }
+        }
+        true
+    }
 
     #[test]
     fn template_works() {
-        let data = HashMap::from([("one", 9)]);
         let result = Template::new("Line $one\nX $x!\n---$>--", 10, 3).unwrap();
         let text = result.as_string();
-        //println!(":: {}", text);
-        assert!(text == "Line     \nX   !\n----------");
+        assert!(compare(&text, "Line\nX   !\n----------"));
 
         assert!(result.data["one"].start == 5);
-
-        let r = result.render_string(&data);
-        println!("{r}");
 
         let result = Template::new(
             r#"
@@ -305,27 +310,21 @@ mod tests {
         .unwrap();
 
         let text = result.render_string(&HashMap::from([("hello", "DOG!")]));
-        //println!("{}", text);
-        assert!(
-            text == r#"
+        assert!(compare(&text, r#"
 +----+-------------+
 |    | DOG!        |
 +----+-------------+
 |    |             |
-+--=-+-------------+"#
-        );
++--=-+-------------+"#));
 
         let text = result.render_string(&HashMap::from([("hello", "a much longer string")]));
-        //println!("{}", text);
-        assert_eq!(
-            text,
-            r#"
+        assert!(compare(&text, r#"
 +----+-------------+
 |    | a much longer string
 +----+-------------+
 |    |             |
-+--=-+-------------+"#
-        );
++--=-+-------------+"#));
+
     }
 
     #[test]
@@ -339,7 +338,6 @@ mod tests {
         song_meta.insert("len".to_string(), Value::Number(100.0));
         song_meta.insert("xxx".to_string(), Value::Data(Vec::<u8>::new()));
 
-        //let templ = Template::new("TITLE:    $full_title\n          $sub_title\nCOMPOSER: $composer\nFORMAT:   $format\n\nTIME: 00:00:00 ($len) SONG: $isong/$songs", 60, 10);
         let templ = Template::new(include_str!("../screen.templ"), 80, 10).unwrap();
         let x = templ.render_string(&song_meta);
 

@@ -363,7 +363,6 @@ mod tests {
 
         let path = PathBuf::from("loz15.miniusf");
         cmd_producer.send(Box::new(move |p| p.load(&path))).unwrap();
-        
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();

@@ -1,19 +1,38 @@
 
-[x] Handle unset meta in template
-[x] Reset meta between songs
-[x] Show Game instead of Title as needed
-[ ] Play/pause function
+V1 TODO
+
+[ ] Resampling (for N64)
+[ ] Show file format in search
+[ ] Correct color / no color rendering
+[ ] Fix double name for game music
+[ ] Start playing all songs
+[ ] Hide song count after done indexing
+[ ] Make cargo installable
+
+NICE FEATURES
+
+[ ] Random play
+[ ] Play/Pause
+[ ] Size meta data
+[ ] Max errors, and show filename
+[ ] Favorites play list
+[ ] Goto author
+[ ] Goto directory
+
+VISUAL IMPROVEMENTS
+
 [ ] Pause time fade animation
-[x] Show next song
-[ ] Color theme choice
-[x] Colored template
-[ ] Auto theme from light/dark shell
-[x] No subsong switch down from zero or up from max (unless zero)
-[ ] Short analyzer to right or long below
-[ ] Song fail: Show error, no sound and go to next after delay
-[x] Add directories recursively
-[ ] Handler non 44100 songs
-[ ] Handle long texts
+[ ] Fade search selector
+[ ] File format color
+[ ] Scroll sub_title
+[ ] Fade/toggle sub title for tracker msg
+
+SCRIPTABLE LOOK
+
+[ ] RHAI functions as template variables
+
+
+
 
 FUTURE
 
