@@ -13,13 +13,18 @@ use std::{
 use cpal::{SampleFormat, SampleRate, traits::*};
 
 use id3::{Tag, TagLike};
+use itertools::Itertools;
 use ringbuf::{StaticRb, traits::*};
 
 use spectrum_analyzer::{
     FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10, windows::hann_window,
 };
 
-use crate::{Args, value::Value};
+use rubato::{
+    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
+
+use crate::{Args, log, value::Value};
 use anyhow::Context;
 use anyhow::Result;
 use musix::{ChipPlayer, MusicError};
@@ -199,6 +204,7 @@ pub(crate) fn run_player(
         })
         .context("Could not find a compatible audio config")?;
     let config = sconf.with_sample_rate(SampleRate(44100));
+    let playback_freq = 44100.0;
 
     let min_freq = args.min_freq as f32;
     let max_freq = args.max_freq as f32;
@@ -212,12 +218,28 @@ pub(crate) fn run_player(
             let ring = StaticRb::<f32, 8192>::default();
             let (mut audio_sink, mut audio_faucet) = ring.split();
 
+            let params = SincInterpolationParameters {
+                sinc_len: 256,
+                f_cutoff: 0.95,
+                interpolation: SincInterpolationType::Linear,
+                oversampling_factor: 256,
+                window: WindowFunction::BlackmanHarris2,
+            };
+            let mut plugin_freq = 32000.0;
+            let mut resampler = SincFixedIn::<f32>::new(
+                playback_freq / plugin_freq,
+                2.0,
+                params,
+                buffer_size / 2,
+                2,
+            )?;
+
             let stream = device.build_output_stream(
                 &config.into(),
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
                     //info.timestamp().playback.duration_since(last_ts);
                     audio_faucet.pop_slice(data);
-                    let ms = data.len() * 1000 / (44100 * 2);
+                    let ms = data.len() * 1000 / (playback_freq as usize * 2);
                     msec.fetch_add(ms, Ordering::SeqCst);
                 },
                 |err| eprintln!("An error occurred on stream: {err}"),
@@ -226,6 +248,7 @@ pub(crate) fn run_player(
             stream.play()?;
 
             let mut target: Vec<i16> = vec![0; buffer_size];
+            let mut wave_out: Vec<f32> = vec![0.0; buffer_size * 2];
 
             let mut player = Player {
                 millis: msec_outside,
@@ -246,7 +269,8 @@ pub(crate) fn run_player(
                 if let Some(chip_player) = &mut player.chip_player {
                     if player.ff_msec > 0 {
                         let rc = chip_player.get_samples(&mut target);
-                        let ms = target.len() * 1000 / (44100 * 2);
+
+                        let ms = target.len() * 1000 / (plugin_freq as usize * 2);
                         if ms > player.ff_msec {
                             player.ff_msec = 0;
                         } else {
@@ -261,16 +285,44 @@ pub(crate) fn run_player(
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
                         }
-                        let samples: Vec<f32> =
-                            target.iter().map(|s16| (*s16 as f32) / 32767.0).collect();
-                        let mix: Vec<f32> =
-                            samples.chunks(fft_div).map(|a| a.iter().sum()).collect();
-                        audio_sink.push_slice(&samples);
+
+                        let hz = chip_player.get_frequency() as f64;
+                        if hz != plugin_freq {
+                            log!("Plugin freq: {hz}");
+                            plugin_freq = hz;
+                            resampler.set_resample_ratio(playback_freq / plugin_freq, true)?;
+                        }
+
+                        let samples = target
+                            .iter()
+                            .map(|s16| (*s16 as f32) / 32767.0)
+                            .collect_vec();
+                        let mix: Vec<_> = samples.chunks(fft_div).map(|a| a.iter().sum()).collect();
+                        if plugin_freq != playback_freq {
+                            let left = samples.iter().cloned().step_by(2).collect_vec();
+                            let right = samples.iter().cloned().skip(1).step_by(2).collect_vec();
+                            let input = vec![left, right];
+                            let (out_left, out_right) = wave_out.split_at_mut(buffer_size);
+                            let mut output = vec![out_left, out_right];
+                            let (_rcount, wcount) =
+                                resampler.process_into_buffer(&input, &mut output, None)?;
+                            let (left, right) = wave_out.split_at(buffer_size);
+                            let samples = left
+                                .iter()
+                                .zip(right.iter())
+                                .take(wcount)
+                                .flat_map(|(&l, &r)| [l, r])
+                                .collect_vec();
+                            audio_sink.push_slice(&samples);
+                        } else {
+                            audio_sink.push_slice(&samples);
+                        }
+
                         let window = hann_window(&mix);
                         let spectrum = samples_fft_to_spectrum(
                             &window,
                             //&temp,
-                            44100,
+                            playback_freq as u32,
                             FrequencyLimit::Range(min_freq, max_freq),
                             Some(&scale_20_times_log10), //divide_by_N_sqrt),
                         )

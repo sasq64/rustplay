@@ -12,6 +12,7 @@ walkdir = "2"
 crossterm = "0.27.0"
 # musix = "0.2.2"
 musix = { path = "../musicplayer/" }
+rubato = "0.16.2"
 cpal = "0.15.3"
 ringbuf = "0.4.1"
 spectrum-analyzer = "1.5.0"
