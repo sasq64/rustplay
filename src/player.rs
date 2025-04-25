@@ -20,11 +20,7 @@ use spectrum_analyzer::{
     FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10, windows::hann_window,
 };
 
-use rubato::{
-    Resampler, SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction,
-};
-
-use crate::{Args, log, value::Value};
+use crate::{Args, log, resampler::Resampler, value::Value};
 use anyhow::Context;
 use anyhow::Result;
 use musix::{ChipPlayer, MusicError};
@@ -218,21 +214,8 @@ pub(crate) fn run_player(
             let ring = StaticRb::<f32, 8192>::default();
             let (mut audio_sink, mut audio_faucet) = ring.split();
 
-            let params = SincInterpolationParameters {
-                sinc_len: 256,
-                f_cutoff: 0.95,
-                interpolation: SincInterpolationType::Linear,
-                oversampling_factor: 256,
-                window: WindowFunction::BlackmanHarris2,
-            };
+            let mut resampler = Resampler::new(buffer_size / 2)?;
             let mut plugin_freq = 32000.0;
-            let mut resampler = SincFixedIn::<f32>::new(
-                playback_freq / plugin_freq,
-                2.0,
-                params,
-                buffer_size / 2,
-                2,
-            )?;
 
             let stream = device.build_output_stream(
                 &config.into(),
@@ -248,7 +231,6 @@ pub(crate) fn run_player(
             stream.play()?;
 
             let mut target: Vec<i16> = vec![0; buffer_size];
-            let mut wave_out: Vec<f32> = vec![0.0; buffer_size * 2];
 
             let mut player = Player {
                 millis: msec_outside,
@@ -290,51 +272,38 @@ pub(crate) fn run_player(
                         if hz != plugin_freq {
                             log!("Plugin freq: {hz}");
                             plugin_freq = hz;
-                            resampler.set_resample_ratio(playback_freq / plugin_freq, true)?;
+                            resampler.set_frequencies(plugin_freq, playback_freq)?;
                         }
 
                         let samples = target
                             .iter()
-                            .map(|s16| (*s16 as f32) / 32767.0)
+                            .take(rc)
+                            .map(|&s16| (s16 as f32) / 32767.0)
                             .collect_vec();
-                        let mix: Vec<_> = samples.chunks(fft_div).map(|a| a.iter().sum()).collect();
-                        if plugin_freq != playback_freq {
-                            let left = samples.iter().cloned().step_by(2).collect_vec();
-                            let right = samples.iter().cloned().skip(1).step_by(2).collect_vec();
-                            let input = vec![left, right];
-                            let (out_left, out_right) = wave_out.split_at_mut(buffer_size);
-                            let mut output = vec![out_left, out_right];
-                            let (_rcount, wcount) =
-                                resampler.process_into_buffer(&input, &mut output, None)?;
-                            let (left, right) = wave_out.split_at(buffer_size);
-                            let samples = left
-                                .iter()
-                                .zip(right.iter())
-                                .take(wcount)
-                                .flat_map(|(&l, &r)| [l, r])
-                                .collect_vec();
-                            audio_sink.push_slice(&samples);
-                        } else {
-                            audio_sink.push_slice(&samples);
-                        }
+                        let resampled = resampler.process(&samples)?;
+                        audio_sink.push_slice(resampled);
 
-                        let window = hann_window(&mix);
-                        let spectrum = samples_fft_to_spectrum(
-                            &window,
-                            //&temp,
-                            playback_freq as u32,
-                            FrequencyLimit::Range(min_freq, max_freq),
-                            Some(&scale_20_times_log10), //divide_by_N_sqrt),
-                        )
-                        .map_err(|_| MusicError {
-                            msg: "FFT Error".into(),
-                        })?;
-                        let data: Vec<u8> = spectrum
-                            .data()
-                            .iter()
-                            .map(|(_, j)| (j.val() * 0.75) as u8)
-                            .collect();
-                        info_producer.push_value("fft", data)?;
+                        if rc == target.len() {
+                            let mix: Vec<_> =
+                                samples.chunks(fft_div).map(|a| a.iter().sum()).collect();
+
+                            let window = hann_window(&mix);
+                            let spectrum = samples_fft_to_spectrum(
+                                &window,
+                                playback_freq as u32,
+                                FrequencyLimit::Range(min_freq, max_freq),
+                                Some(&scale_20_times_log10),
+                            )
+                            .map_err(|_| MusicError {
+                                msg: "FFT Error".into(),
+                            })?;
+                            let data: Vec<u8> = spectrum
+                                .data()
+                                .iter()
+                                .map(|(_, j)| (j.val() * 0.75) as u8)
+                                .collect();
+                            info_producer.push_value("fft", data)?;
+                        }
                     } else {
                         std::thread::sleep(Duration::from_millis(10));
                     }

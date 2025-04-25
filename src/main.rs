@@ -11,6 +11,7 @@ mod rustplay;
 mod templ;
 mod term_extra;
 mod value;
+mod resampler;
 
 use rhai::FnPtr;
 use rustplay::RustPlay;

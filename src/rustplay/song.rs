@@ -27,9 +27,10 @@ impl FileInfo {
     pub fn full_song_name(&self) -> String {
         let title = self.get("title");
         let composer = self.get("composer");
+        let ext = self.path.extension().map(|s| s.to_string_lossy()).unwrap();
         let file_name = self.path.file_name().map(|s| s.to_string_lossy());
-        if title != &Value::Unknown() {
-            return format!("{title} / {composer}");
+        if composer != &Value::Unknown() {
+            return format!("{title} / {composer} [{ext}]");
         }
         if let Some(file_name) = file_name {
             return file_name.to_string();

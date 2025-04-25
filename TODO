@@ -2,13 +2,14 @@
 V1 TODO
 
 [x] Resampling (for N64)
-[ ] Show file format in search
-[ ] Show file name only when meta data not known
+[x] Show file format in search
+[x] Show file name only when meta data not known
 [ ] Correct color / no color rendering
 [ ] Fix double name for game music
 [ ] Start playing all songs
 [ ] Hide song count after done indexing
 [ ] Make cargo installable
+[x] Catch c++ exceptions
 
 NICE FEATURES
 
