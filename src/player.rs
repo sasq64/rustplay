@@ -98,6 +98,7 @@ impl Player {
         Ok(true)
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn ff(&mut self, msec: usize) -> PlayResult {
         self.ff_msec += msec;
         Ok(true)
@@ -179,8 +180,10 @@ pub(crate) fn run_player(
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
+    data_dir: PathBuf
 ) -> Result<JoinHandle<()>> {
-    musix::init(Path::new("data"))?;
+
+    musix::init(&data_dir)?;
 
     let device = cpal::default_host()
         .default_output_device()
@@ -280,8 +283,8 @@ pub(crate) fn run_player(
                             .take(rc)
                             .map(|&s16| (s16 as f32) / 32767.0)
                             .collect_vec();
-                        let resampled = resampler.process(&samples)?;
-                        audio_sink.push_slice(resampled);
+                        let new_samples = resampler.process(&samples)?;
+                        audio_sink.push_slice(new_samples);
 
                         if rc == target.len() {
                             let mix: Vec<_> =
@@ -321,7 +324,6 @@ pub(crate) fn run_player(
 #[cfg(test)]
 mod tests {
     use std::path::Path;
-    use std::path::PathBuf;
     use std::sync::Arc;
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
@@ -357,8 +359,9 @@ mod tests {
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
+        let data = Path::new("data");
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, data.into()).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();
@@ -376,14 +379,11 @@ mod tests {
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, Path::new("data").into()).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();
         assert!(matches!(val, Value::Error(_)));
-
-        let path = PathBuf::from("loz15.miniusf");
-        cmd_producer.send(Box::new(move |p| p.load(&path))).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();

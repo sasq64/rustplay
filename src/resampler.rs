@@ -47,15 +47,15 @@ impl Resampler {
         use rubato::Resampler;
 
         if self.source_hz != self.target_hz {
-            let left = samples.iter().cloned().step_by(2).collect_vec();
-            let right = samples.iter().cloned().skip(1).step_by(2).collect_vec();
+            let left = samples.iter().copied().step_by(2).collect_vec();
+            let right = samples.iter().copied().skip(1).step_by(2).collect_vec();
             let input = vec![left, right];
-            let (out_left, out_right) = self.wave_out.split_at_mut(self.buffer_size*3);
+            let (out_left, out_right) = self.wave_out.split_at_mut(self.buffer_size * 3);
             let mut output = vec![out_left, out_right];
             let (_rcount, wcount) =
                 self.resampler
                     .process_into_buffer(&input, &mut output, None)?;
-            let (left, right) = self.wave_out.split_at(self.buffer_size*3);
+            let (left, right) = self.wave_out.split_at(self.buffer_size * 3);
             self.samples_out.resize(wcount * 2, 0.0);
             for (i, (&l, &r)) in left.iter().zip(right.iter()).take(wcount).enumerate() {
                 self.samples_out[i * 2] = l;
@@ -71,8 +71,8 @@ mod test {
 
     #[test]
     fn test_resample() {
-        use itertools::Itertools;
         use super::Resampler;
+        use itertools::Itertools;
 
         let n = 10000;
         let mut resampler = Resampler::new(n).unwrap();

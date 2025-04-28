@@ -4,11 +4,11 @@ V1 TODO
 [x] Resampling (for N64)
 [x] Show file format in search
 [x] Show file name only when meta data not known
-[ ] Correct color / no color rendering
+[x] Correct color / no color rendering
 [ ] Fix double name for game music
-[ ] Start playing all songs
-[ ] Hide song count after done indexing
-[ ] Make cargo installable
+[x] Start playing all songs
+[x] Hide song count after done indexing
+[?] Make cargo installable
 [x] Catch c++ exceptions
 
 NICE FEATURES
@@ -21,6 +21,12 @@ NICE FEATURES
 [ ] Goto author
 [ ] Goto directory
 
+ISSUES
+
+[ ] No FFT when sample data is non-power-of-two
+[ ] FFT delay for bluetooth
+[ ] Song count 0
+
 VISUAL IMPROVEMENTS
 
 [ ] Pause time fade animation
@@ -32,6 +38,10 @@ VISUAL IMPROVEMENTS
 SCRIPTABLE LOOK
 
 [ ] RHAI functions as template variables
+
+CODE STRUCTURE
+
+[ ] Refactor to main + lib
 
 
 

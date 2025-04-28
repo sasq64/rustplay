@@ -2,16 +2,25 @@
 
 //! rustplay main file
 use std::{
+    cell::RefCell,
+    collections::HashMap,
+    error::Error,
+    fs::{File, OpenOptions},
     io::Write,
-    cell::RefCell, collections::HashMap, error::Error, fs::{File, OpenOptions}, panic, path::PathBuf, process, rc::Rc, sync::{LazyLock, Mutex}, time::Duration
+    panic,
+    path::PathBuf,
+    process,
+    rc::Rc,
+    sync::{LazyLock, Mutex},
+    time::Duration,
 };
 
 mod player;
+mod resampler;
 mod rustplay;
 mod templ;
 mod term_extra;
 mod value;
-mod resampler;
 
 use rhai::FnPtr;
 use rustplay::RustPlay;
@@ -19,8 +28,7 @@ use rustplay::RustPlay;
 use clap::{Parser, ValueEnum};
 
 pub fn log(text: &str, file_name: &str, line: u32) {
-
-   static LOG_FILE: LazyLock<Mutex<File>> = LazyLock::new(|| {
+    static LOG_FILE: LazyLock<Mutex<File>> = LazyLock::new(|| {
         let file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -90,7 +98,7 @@ struct Args {
 struct TemplateVar {
     color: Option<u32>,
     alias: Option<String>,
-    code: Option<FnPtr>
+    code: Option<FnPtr>,
 }
 
 trait DynamicVar {
@@ -164,7 +172,6 @@ fn main() -> Result<(), Box<dyn Error>> {
                 settings.borrow_mut().variables.insert(name.to_owned(), v);
             }
         });
-
 
     let p = PathBuf::from("init.rhai");
     if p.is_file() {

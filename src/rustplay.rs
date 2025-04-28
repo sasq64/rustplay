@@ -1,5 +1,5 @@
 use std::collections::{HashMap, VecDeque};
-use std::io::{self, Write as _, stdout};
+use std::io::{self, Cursor, Write as _, stdout};
 use std::panic;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
@@ -19,9 +19,7 @@ use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     style::{Color, Print, SetForegroundColor},
     terminal,
-    terminal::{
-        Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen,
-    },
+    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 
 mod gui;
@@ -47,6 +45,7 @@ struct State {
     quit: bool,
     use_color: bool,
     errors: VecDeque<String>,
+    player_started: bool,
 }
 
 impl State {
@@ -175,6 +174,20 @@ impl RustPlay {
             (1, 9)
         };
 
+        let data_zip = include_bytes!("oldplay.zip");
+        let data_dir = if let Some(cache_dir) = dirs::cache_dir() {
+            let dd = cache_dir.join("oldplay-data");
+            if !dd.exists() {
+                zip_extract::extract(Cursor::new(data_zip), &dd, false)?;
+            }
+            dd
+        } else {
+            dirs::home_dir().unwrap()
+        };
+
+        let indexer = RemoteIndexer::new()?;
+        let current_list = indexer.get_all_songs();
+
         Ok(RustPlay {
             cmd_producer,
             info_consumer,
@@ -185,6 +198,7 @@ impl RustPlay {
                 info_producer,
                 cmd_consumer,
                 msec,
+                data_dir,
             )?),
             fft_pos: settings.args.visualizer,
             errors: VecDeque::new(),
@@ -195,7 +209,7 @@ impl RustPlay {
             },
             height: h.into(),
             no_term: settings.args.no_term,
-            indexer: RemoteIndexer::new()?,
+            indexer,
             menu_component: gui::SongMenu {
                 height: h.into(),
                 ..gui::SongMenu::default()
@@ -208,7 +222,7 @@ impl RustPlay {
                 y,
                 height: settings.args.visualizer_height as i32,
             },
-            current_list: None,
+            current_list,
             current_song: 0,
         })
     }
@@ -247,6 +261,16 @@ impl RustPlay {
 
     pub fn draw_screen(&mut self) -> Result<()> {
         let play_time = self.msec.load(Ordering::SeqCst);
+        if !self.state.player_started {
+            if let Some(cl) = &self.current_list {
+                if cl.len() > 0 {
+                    let song = cl.get(0);
+                    self.play_song(&song);
+                    self.state.player_started = true
+                }
+            }
+        }
+        // TODO: Separate update() function for things like this
         if self.state.len_msec > 0 && play_time > self.state.len_msec {
             self.next();
         }
@@ -260,7 +284,7 @@ impl RustPlay {
 
         let mut out = stdout();
 
-        out.queue(normal_bg)?.queue(black_bg)?.flush()?;
+        out.queue(normal_bg)?.queue(&black_bg)?.flush()?;
         if self.state.changed {
             self.state.changed = false;
             stdout()
@@ -273,12 +297,16 @@ impl RustPlay {
             self.menu_component.draw(&mut self.indexer)?;
             return Ok(());
         }
-        self.search_component.draw()?;
 
-        if let Some((x, y)) = self.templ.get_pos("count") {
-            out.queue(cursor::MoveTo(x, y))?
-                .queue(Print(format!("{}", self.indexer.index_count())))?
-                .flush()?;
+        self.search_component.draw()?;
+        out.queue(&black_bg)?;
+
+        if self.indexer.working() {
+            if let Some((x, y)) = self.templ.get_pos("count") {
+                out.queue(cursor::MoveTo(x, y))?
+                    .queue(Print(format!("{}", self.indexer.index_count())))?
+                    .flush()?;
+            }
         }
 
         if self.fft_pos != VisualizerPos::None {
@@ -313,6 +341,8 @@ impl RustPlay {
         Ok(())
     }
 
+    // The passed function is sent to the player thread for execution, so must be Send,
+    // and also 'static since we have not tied it to the lifetime of the player.
     fn send_cmd(&mut self, f: impl FnOnce(&mut Player) -> PlayResult + Send + 'static) {
         if self.cmd_producer.send(Box::new(f)).is_err() {
             panic!("");
@@ -327,7 +357,7 @@ impl RustPlay {
     }
 
     fn set_song(&mut self, song: u32) {
-        self.send_cmd(move |p| p.set_song(song as i32));
+        self.send_cmd(move |player| player.set_song(song as i32));
     }
 
     pub fn handle_keys(&mut self) -> Result<bool> {
@@ -349,7 +379,7 @@ impl RustPlay {
                     KeyCode::Char('c') if ctrl => self.state.quit = true,
                     KeyCode::Char('n') if ctrl => self.next(),
                     KeyCode::Char('p') if ctrl => self.prev(),
-                    KeyCode::Char('f') => self.send_cmd(|p| p.ff(10000)),
+                    KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
                     KeyCode::Right => self.send_cmd(Player::next_song),
                     KeyCode::Left => self.send_cmd(Player::prev_song),
                     _ => handled = false,
@@ -406,7 +436,7 @@ impl RustPlay {
     fn get_song(&self, n: usize) -> Option<FileInfo> {
         if let Some(cl) = &self.current_list {
             if n < cl.len() {
-                return Some(cl[n].clone());
+                return Some(cl.get(n));
             }
         }
         None
@@ -425,7 +455,7 @@ impl RustPlay {
 
         self.state.update_title();
         let path = song.path().to_owned();
-        self.send_cmd(move |p| p.load(&path));
+        self.send_cmd(move |player| player.load(&path));
     }
 
     pub fn prev(&mut self) {
@@ -433,7 +463,7 @@ impl RustPlay {
             if self.current_song > 1 {
                 self.current_song -= 1;
             }
-            let song = cl[self.current_song].clone();
+            let song = cl.get(self.current_song);
             self.play_song(&song);
         }
     }
@@ -442,12 +472,7 @@ impl RustPlay {
             if (self.current_song + 1) < cl.len() {
                 self.current_song += 1;
             }
-            let song = cl[self.current_song].clone();
-            self.play_song(&song);
-            return;
-        }
-
-        if let Some(song) = self.indexer.next() {
+            let song = cl.get(self.current_song);
             self.play_song(&song);
         }
     }

@@ -1,7 +1,10 @@
-use std::{collections::HashMap, ops::Index, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    ops::Index,
+    path::{Path, PathBuf},
+};
 
 use super::Value;
-
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileInfo {
@@ -27,10 +30,12 @@ impl FileInfo {
     pub fn full_song_name(&self) -> String {
         let title = self.get("title");
         let composer = self.get("composer");
-        let ext = self.path.extension().map(|s| s.to_string_lossy()).unwrap();
         let file_name = self.path.file_name().map(|s| s.to_string_lossy());
         if composer != &Value::Unknown() {
-            return format!("{title} / {composer} [{ext}]");
+            if let Some(ext) = self.path.extension() {
+                return format!("{title} / {composer} [{}]", ext.to_string_lossy());
+            }
+            return format!("{title} / {composer}");
         }
         if let Some(file_name) = file_name {
             return file_name.to_string();
@@ -46,33 +51,27 @@ impl FileInfo {
     }
 }
 
-
 pub struct SongArray {
-    pub songs: Vec<FileInfo>
+    pub songs: Vec<FileInfo>,
 }
 
-impl Index<usize> for SongArray {
-    type Output = FileInfo;
-
-    fn index(&self, index: usize) -> &Self::Output {
-        self.songs.index(index)
-    }
-
-}
-
-pub trait SongCollection : Index<usize, Output=FileInfo> {
+pub trait SongCollection {
+    fn get(&self, index: usize) -> FileInfo;
     fn index_of(&self, song: &FileInfo) -> Option<usize>;
     fn len(&self) -> usize;
 }
 
 impl SongCollection for SongArray {
+    fn get(&self, index: usize) -> FileInfo {
+        self.songs.index(index).clone()
+    }
 
     fn len(&self) -> usize {
         self.songs.len()
     }
 
     fn index_of(&self, song: &FileInfo) -> Option<usize> {
-        for (i,s) in self.songs.iter().enumerate()  {
+        for (i, s) in self.songs.iter().enumerate() {
             if song.path() == s.path() {
                 return Some(i);
             }

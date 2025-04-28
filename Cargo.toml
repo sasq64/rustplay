@@ -1,6 +1,6 @@
 [package]
-name = "musplay"
-version = "0.2.0"
+name = "oldplay"
+version = "0.1.0"
 authors = ["Jonas Minnberg <sasq64@gmail.com>"]
 edition = "2024"
 
@@ -10,8 +10,8 @@ debug = 1
 [dependencies]
 walkdir = "2"
 crossterm = "0.27.0"
-# musix = "0.2.2"
-musix = { path = "../musicplayer/" }
+musix = "0.2.3"
+# musix = { path = "../musicplayer/" }
 rubato = "0.16.2"
 cpal = "0.15.3"
 ringbuf = "0.4.1"
@@ -24,4 +24,6 @@ id3 = "1.13.1"
 mp3-duration = "0.1.10"
 tantivy = "0.22.0"
 anyhow = "1.0"
+dirs = "6.0"
+zip-extract = "0.2.2"
 

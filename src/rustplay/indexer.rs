@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
@@ -23,7 +23,6 @@ use walkdir::WalkDir;
 use crate::value::Value;
 
 use super::song::{FileInfo, SongArray, SongCollection};
-
 
 #[inline]
 /// Convert 8 bit unicode to utf8 String
@@ -52,6 +51,7 @@ pub struct Indexer {
 
     song_list: VecDeque<FileInfo>,
     count: AtomicUsize,
+    working: AtomicBool,
     modland_formats: HashSet<&'static str>,
 }
 
@@ -106,6 +106,7 @@ impl Indexer {
             //file_field,
             song_list: VecDeque::new(),
             count: 0.into(),
+            working: AtomicBool::new(false),
             modland_formats,
         })
     }
@@ -267,6 +268,31 @@ impl Indexer {
     }
 }
 
+pub struct IndexedSongs {
+    indexer: Arc<Mutex<Indexer>>,
+}
+
+impl SongCollection for IndexedSongs {
+    fn get(&self, index: usize) -> FileInfo {
+        let i = self.indexer.lock().unwrap();
+        return i.song_list[index].clone();
+    }
+    fn index_of(&self, song: &FileInfo) -> Option<usize> {
+        let i = self.indexer.lock().unwrap();
+        for (i, s) in i.song_list.iter().enumerate() {
+            if song.path() == s.path() {
+                return Some(i);
+            }
+        }
+        None
+    }
+
+    fn len(&self) -> usize {
+        let i = self.indexer.lock().unwrap();
+        i.song_list.len()
+    }
+}
+
 pub struct RemoteIndexer {
     indexer: Arc<Mutex<Indexer>>,
     sender: mpsc::Sender<Cmd>,
@@ -301,6 +327,7 @@ impl RemoteIndexer {
             match cmd {
                 Cmd::AddPath(path) => {
                     let mut now = Instant::now();
+                    lock().working.store(true, Ordering::Relaxed);
                     for entry in WalkDir::new(path) {
                         let p = entry?;
                         if let Some(ext) = p.path().extension() {
@@ -322,6 +349,7 @@ impl RemoteIndexer {
                         }
                     }
                     lock().commit()?;
+                    lock().working.store(false, Ordering::Relaxed);
                 }
             }
         }
@@ -391,9 +419,18 @@ impl RemoteIndexer {
     }
 
     pub fn get_song_result(&self) -> Option<Box<dyn SongCollection>> {
-
         let result = self.lock().result.clone();
         Some(Box::new(SongArray { songs: result }))
+    }
+
+    pub(crate) fn get_all_songs(&self) -> Option<Box<dyn SongCollection>> {
+        Some(Box::new(IndexedSongs {
+            indexer: self.indexer.clone(),
+        }))
+    }
+
+    pub(crate) fn working(&self) -> bool {
+        self.indexer.lock().unwrap().working.load(Ordering::Relaxed)
     }
 }
 
