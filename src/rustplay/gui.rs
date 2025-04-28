@@ -207,7 +207,9 @@ impl SearchField {
             KeyCode::Char(x) => self.shell.insert(x),
             KeyCode::Esc => self.shell.clear(),
             KeyCode::Enter => search = true,
-            KeyCode::Up | KeyCode::Down => return Ok(KeyReturn::Navigate),
+            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
+                return Ok(KeyReturn::Navigate);
+            }
             _ => {}
         };
         if search {

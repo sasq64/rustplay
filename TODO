@@ -5,7 +5,7 @@ V1 TODO
 [x] Show file format in search
 [x] Show file name only when meta data not known
 [x] Correct color / no color rendering
-[ ] Fix double name for game music
+[x] Fix double name for game music
 [x] Start playing all songs
 [x] Hide song count after done indexing
 [?] Make cargo installable

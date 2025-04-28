@@ -1109,6 +1109,8 @@ checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 [[package]]
 name = "musix"
 version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "812b7496330802ff10b865484e7c0875ad6b35d76bf6d0bb68c0c99f525477ad"
 dependencies = [
  "cc",
  "cmake",
@@ -1254,7 +1256,7 @@ dependencies = [
 
 [[package]]
 name = "oldplay"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "clap",

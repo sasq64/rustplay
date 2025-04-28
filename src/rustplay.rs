@@ -92,10 +92,8 @@ impl State {
             let composer = self.get_meta_or("composer", "??");
             let full_title = if game.is_empty() {
                 title.to_string()
-            } else if title.is_empty() {
-                game.to_string()
             } else {
-                format!("{title} ({game})")
+                game.to_string()
             };
             self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
             self.set_meta("full_title", full_title);
@@ -380,7 +378,7 @@ impl RustPlay {
                     KeyCode::Char('c') if ctrl => self.state.quit = true,
                     KeyCode::Char('n') if ctrl => self.next(),
                     KeyCode::Char('p') if ctrl => self.prev(),
-                    KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
+                    KeyCode::Char('f') if ctrl => self.send_cmd(|player| player.ff(10000)),
                     KeyCode::Right => self.send_cmd(Player::next_song),
                     KeyCode::Left => self.send_cmd(Player::prev_song),
                     _ => handled = false,
