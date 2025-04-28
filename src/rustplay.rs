@@ -265,6 +265,7 @@ impl RustPlay {
             if let Some(cl) = &self.current_list {
                 if cl.len() > 0 {
                     let song = cl.get(0);
+                    log!("Staring with song {:?}", &song.path);
                     self.play_song(&song);
                     self.state.player_started = true
                 }

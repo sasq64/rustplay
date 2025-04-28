@@ -337,10 +337,12 @@ impl RemoteIndexer {
                             }
                         }
                         if p.file_type().is_file() {
-                            if let Some(info) = Indexer::identify_song(p.path())? {
-                                lock().add_with_info(p.path(), &info)?;
-                            } else {
-                                lock().add_path(p.path())?;
+                            if musix::can_handle(p.path())? {
+                                if let Some(info) = Indexer::identify_song(p.path())? {
+                                    lock().add_with_info(p.path(), &info)?;
+                                } else {
+                                    lock().add_path(p.path())?;
+                                }
                             }
                         }
                         if now.elapsed() > Duration::from_millis(1000) {
