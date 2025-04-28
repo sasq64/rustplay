@@ -13,8 +13,8 @@ debug = 1
 [dependencies]
 walkdir = "2"
 crossterm = "0.27.0"
-musix = "0.2.4"
-# musix = { path = "../musicplayer/" }
+# musix = "0.2.4"
+musix = { path = "../musicplayer/" }
 rubato = "0.16.2"
 cpal = "0.15.3"
 ringbuf = "0.4.1"

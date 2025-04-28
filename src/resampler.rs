@@ -21,7 +21,7 @@ impl Resampler {
             oversampling_factor: 256,
             window: WindowFunction::BlackmanHarris2,
         };
-        let resampler = SincFixedIn::<f32>::new(1.0, 2.0, params, buffer_size, 2)?;
+        let resampler = SincFixedIn::<f32>::new(1.0, 4.0, params, buffer_size, 2)?;
         let wave_out: Vec<f32> = vec![0.0; buffer_size * 6];
         let samples_out: Vec<f32> = vec![0.0; buffer_size * 6];
         Ok(Resampler {

@@ -120,15 +120,16 @@ impl Player {
                         let secs = duration.as_secs() as i32;
                         info_producer.push_value("length", secs)?;
                     }
-                    let tag = Tag::read_from_path(new_song)?;
-                    if let Some(album) = tag.album() {
-                        info_producer.push_value("album", album)?;
-                    }
-                    if let Some(artist) = tag.artist() {
-                        info_producer.push_value("composer", artist)?;
-                    }
-                    if let Some(title) = tag.title() {
-                        info_producer.push_value("title", title)?;
+                    if let Ok(tag) = Tag::read_from_path(new_song) {
+                        if let Some(album) = tag.album() {
+                            info_producer.push_value("album", album)?;
+                        }
+                        if let Some(artist) = tag.artist() {
+                            info_producer.push_value("composer", artist)?;
+                        }
+                        if let Some(title) = tag.title() {
+                            info_producer.push_value("title", title)?;
+                        }
                     }
                 }
             }
