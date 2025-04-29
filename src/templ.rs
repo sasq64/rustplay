@@ -23,7 +23,6 @@ pub struct Template {
     templ: Vec<String>,
     use_color: bool,
     data: HashMap<String, PlaceHolder>,
-
 }
 
 fn color(color: u32) -> Color {
@@ -181,7 +180,7 @@ impl Template {
         let mut lines: Vec<String> = lines
             .iter()
             .enumerate()
-            .map(|(i, line)| {
+            .map(|(i, &line)| {
                 //let mut target: Vec<char> = line.chars().collect();
                 let mut target = line.to_string();
                 for cap in re.captures_iter(line) {
@@ -270,9 +269,9 @@ impl Template {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::collections::HashMap;
-    use crate::value::Value;
     use super::Template;
+    use crate::value::Value;
+    use std::collections::HashMap;
 
     fn compare(a: &str, b: &str) -> bool {
         let one = a.lines().map(str::trim).filter(|l| !l.is_empty());
@@ -280,7 +279,7 @@ mod tests {
         for (left, right) in one.zip(two) {
             if left != right {
                 println!("'{left}' != '{right}'");
-                return false
+                return false;
             }
         }
         true
@@ -310,21 +309,26 @@ mod tests {
         .unwrap();
 
         let text = result.render_string(&HashMap::from([("hello", "DOG!")]));
-        assert!(compare(&text, r#"
+        assert!(compare(
+            &text,
+            r#"
 +----+-------------+
 |    | DOG!        |
 +----+-------------+
 |    |             |
-+--=-+-------------+"#));
++--=-+-------------+"#
+        ));
 
         let text = result.render_string(&HashMap::from([("hello", "a much longer string")]));
-        assert!(compare(&text, r#"
+        assert!(compare(
+            &text,
+            r#"
 +----+-------------+
 |    | a much longer string
 +----+-------------+
 |    |             |
-+--=-+-------------+"#));
-
++--=-+-------------+"#
+        ));
     }
 
     #[test]

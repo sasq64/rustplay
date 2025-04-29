@@ -17,7 +17,10 @@ use anyhow::Context;
 use anyhow::Result;
 use anyhow::anyhow;
 use tantivy::{Index, IndexWriter, ReloadPolicy, doc};
-use tantivy::{IndexReader, schema::*};
+use tantivy::{
+    IndexReader,
+    schema::{Field, OwnedValue, STORED, Schema, TEXT, TantivyDocument},
+};
 use walkdir::WalkDir;
 
 use crate::value::Value;
@@ -72,7 +75,7 @@ fn get_string(doc: &TantivyDocument, field: Field) -> Result<String> {
             _ => Err(anyhow!("")),
         };
     }
-    Ok("".into())
+    Ok(String::new())
 }
 
 impl Indexer {
@@ -116,10 +119,10 @@ impl Indexer {
 
         let file_name = song_path.file_stem().unwrap_or_default().to_string_lossy();
         let title = if !info.title.is_empty() {
-            if !info.game.is_empty() {
-                format!("{} ({})", info.game, info.title)
-            } else {
+            if info.game.is_empty() {
                 info.title.clone()
+            } else {
+                format!("{} ({})", info.game, info.title)
             }
         } else if !info.game.is_empty() {
             info.game.clone()
@@ -275,7 +278,7 @@ pub struct IndexedSongs {
 impl SongCollection for IndexedSongs {
     fn get(&self, index: usize) -> FileInfo {
         let i = self.indexer.lock().unwrap();
-        return i.song_list[index].clone();
+        i.song_list[index].clone()
     }
     fn index_of(&self, song: &FileInfo) -> Option<usize> {
         let i = self.indexer.lock().unwrap();
@@ -394,8 +397,7 @@ impl RemoteIndexer {
         i.count.load(Ordering::Relaxed)
     }
 
-    pub fn commit(&self) {}
-
+    #[allow(clippy::unnecessary_wraps)]
     pub fn get_songs(&self, start: usize, stop: usize) -> Result<Vec<FileInfo>> {
         let indexer = self.lock();
         let song_len = indexer.result.len();
@@ -418,11 +420,13 @@ impl RemoteIndexer {
         indexer.result.len()
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn get_song_result(&self) -> Option<Box<dyn SongCollection>> {
         let result = self.lock().result.clone();
         Some(Box::new(SongArray { songs: result }))
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub(crate) fn get_all_songs(&self) -> Option<Box<dyn SongCollection>> {
         Some(Box::new(IndexedSongs {
             indexer: self.indexer.clone(),

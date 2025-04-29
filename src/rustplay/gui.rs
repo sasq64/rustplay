@@ -50,6 +50,7 @@ impl SongMenu {
         Ok(())
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn handle_key(
         &mut self,
         indexer: &mut RemoteIndexer,
@@ -59,12 +60,16 @@ impl SongMenu {
         match key.code {
             KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
             KeyCode::Char(_) => return Ok(KeyReturn::Navigate),
-            KeyCode::Up => self.selected -= if self.selected > 0 { 1 } else { 0 },
+            KeyCode::Up => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+            }
             KeyCode::PageUp => {
-                self.selected = if self.selected >= self.height {
-                    self.selected - self.height
+                if self.selected >= self.height {
+                    self.selected -= self.height;
                 } else {
-                    0
+                    self.selected = 0;
                 }
             }
             KeyCode::PageDown => self.selected += self.height,
@@ -84,7 +89,7 @@ impl SongMenu {
                 0
             }
         } else if self.selected >= self.start_pos + self.height {
-            self.start_pos += self.height
+            self.start_pos += self.height;
         }
 
         if song_len > 0 {
@@ -112,6 +117,10 @@ impl Shell {
             cmd: Vec::new(),
             edit_pos: 0,
         }
+    }
+
+    fn len(&self) -> usize {
+        self.cmd.len()
     }
 
     fn command(&self) -> String {
@@ -175,7 +184,7 @@ impl SearchField {
             ypos,
             prompt_color: Color::Yellow,
             cursor_color: Color::Red,
-            text_color: Color::White,
+            text_color: Color::Green,
         }
     }
 }
@@ -200,12 +209,18 @@ impl SearchField {
         Ok(())
     }
 
+    #[allow(clippy::unnecessary_wraps)]
     pub fn handle_key(&mut self, key: event::KeyEvent) -> Result<KeyReturn> {
         let mut search = false;
         match key.code {
             KeyCode::Backspace => self.shell.del(),
             KeyCode::Char(x) => self.shell.insert(x),
-            KeyCode::Esc => self.shell.clear(),
+            KeyCode::Esc => {
+                if self.shell.len() == 0 {
+                    return Ok(KeyReturn::ExitMenu);
+                }
+                self.shell.clear();
+            }
             KeyCode::Enter => search = true,
             KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
                 return Ok(KeyReturn::Navigate);
@@ -250,7 +265,7 @@ impl Fft {
             self.data.resize(data.len(), 0.0);
         }
         data.iter().zip(self.data.iter_mut()).for_each(|(a, b)| {
-            let d = *a as f32;
+            let d = f32::from(*a);
             *b = if *b < d { d } else { *b * 0.75 + d * 0.25 }
         });
     }

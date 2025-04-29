@@ -12,18 +12,16 @@ use std::{
 
 use cpal::{SampleFormat, SampleRate, traits::*};
 
+use fft::Fft;
 use id3::{Tag, TagLike};
 use itertools::Itertools;
 use ringbuf::{StaticRb, traits::*};
 
-use spectrum_analyzer::{
-    FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10, windows::hann_window,
-};
-
 use crate::{Args, log, resampler::Resampler, value::Value};
-use anyhow::Context;
-use anyhow::Result;
+use anyhow::{Context, Result};
 use musix::{ChipPlayer, MusicError};
+
+mod fft;
 
 pub(crate) type PlayResult = Result<bool, MusicError>;
 
@@ -136,7 +134,7 @@ impl Player {
         }
         if let Some(chip_player) = &mut self.chip_player {
             while let Some(meta) = chip_player.get_changed_meta() {
-                let val = chip_player.get_meta_string(&meta).unwrap_or("".into());
+                let val = chip_player.get_meta_string(&meta).unwrap_or(String::new());
                 let v: Value = match meta.as_str() {
                     "song" | "startSong" => {
                         self.song = val.parse::<i32>()?;
@@ -176,15 +174,15 @@ impl PushValue for mpsc::Sender<Info> {
 
 fn check_mp3() {}
 
+#[allow(clippy::too_many_lines)]
 pub(crate) fn run_player(
     args: &Args,
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
-    data_dir: PathBuf
+    data_dir: &Path,
 ) -> Result<JoinHandle<()>> {
-
-    musix::init(&data_dir)?;
+    musix::init(data_dir)?;
 
     let device = cpal::default_host()
         .default_output_device()
@@ -204,11 +202,13 @@ pub(crate) fn run_player(
         })
         .context("Could not find a compatible audio config")?;
     let config = sconf.with_sample_rate(SampleRate(44100));
-    let playback_freq = 44100.0;
+    let playback_freq = 44100u32;
 
-    let min_freq = args.min_freq as f32;
-    let max_freq = args.max_freq as f32;
-    let fft_div = args.fft_div * 2;
+    let fft = Fft {
+        divider: args.fft_div * 2,
+        min_freq: args.min_freq as f32,
+        max_freq: args.max_freq as f32,
+    };
 
     let msec_outside = msec.clone();
     let msec_skip = msec.clone();
@@ -219,7 +219,7 @@ pub(crate) fn run_player(
             let (mut audio_sink, mut audio_faucet) = ring.split();
 
             let mut resampler = Resampler::new(buffer_size / 2)?;
-            let mut plugin_freq = 32000.0;
+            let mut plugin_freq = 32000u32;
 
             let stream = device.build_output_stream(
                 &config.into(),
@@ -240,8 +240,6 @@ pub(crate) fn run_player(
                 millis: msec_outside,
                 ..Player::default()
             };
-
-            // info_producer.push_value("done", 0)?;
 
             while !player.quitting {
                 while let Ok(cmd_fn) = cmd_consumer.try_recv() {
@@ -272,7 +270,7 @@ pub(crate) fn run_player(
                             info_producer.push_value("done", 0)?;
                         }
 
-                        let hz = chip_player.get_frequency() as f64;
+                        let hz = chip_player.get_frequency();
                         if hz != plugin_freq {
                             log!("Plugin freq: {hz}");
                             plugin_freq = hz;
@@ -282,30 +280,13 @@ pub(crate) fn run_player(
                         let samples = target
                             .iter()
                             .take(rc)
-                            .map(|&s16| (s16 as f32) / 32767.0)
+                            .map(|&s16| f32::from(s16) / 32767.0)
                             .collect_vec();
                         let new_samples = resampler.process(&samples)?;
                         audio_sink.push_slice(new_samples);
 
                         if rc == target.len() {
-                            let mix: Vec<_> =
-                                samples.chunks(fft_div).map(|a| a.iter().sum()).collect();
-
-                            let window = hann_window(&mix);
-                            let spectrum = samples_fft_to_spectrum(
-                                &window,
-                                playback_freq as u32,
-                                FrequencyLimit::Range(min_freq, max_freq),
-                                Some(&scale_20_times_log10),
-                            )
-                            .map_err(|_| MusicError {
-                                msg: "FFT Error".into(),
-                            })?;
-                            let data: Vec<u8> = spectrum
-                                .data()
-                                .iter()
-                                .map(|(_, j)| (j.val() * 0.75) as u8)
-                                .collect();
+                            let data = fft.run(&samples, playback_freq)?;
                             info_producer.push_value("fft", data)?;
                         }
                     } else {
@@ -362,7 +343,8 @@ mod tests {
         let args = Args { ..Args::default() };
         let data = Path::new("data");
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, data.into()).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, data.into())
+                .unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();
@@ -379,8 +361,14 @@ mod tests {
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
-        let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, Path::new("data").into()).unwrap();
+        let player_thread = crate::player::run_player(
+            &args,
+            info_producer,
+            cmd_consumer,
+            msec,
+            Path::new("data").into(),
+        )
+        .unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();

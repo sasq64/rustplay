@@ -2,17 +2,17 @@ use anyhow::Result;
 use itertools::Itertools;
 use rubato::{SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
 
+#[allow(clippy::struct_field_names)]
 pub struct Resampler {
     resampler: SincFixedIn<f32>,
     wave_out: Vec<f32>,
     samples_out: Vec<f32>,
-    source_hz: f64,
-    target_hz: f64,
     buffer_size: usize,
+    enabled: bool,
 }
 
 impl Resampler {
-    /// buffer_size is number of stereo samples to feed into it at each process
+    /// `buffer_size` is number of stereo samples to feed into it at each process
     pub fn new(buffer_size: usize) -> Result<Resampler> {
         let params = SincInterpolationParameters {
             sinc_len: 256,
@@ -28,25 +28,23 @@ impl Resampler {
             resampler,
             wave_out,
             samples_out,
-            source_hz: 44100.0,
-            target_hz: 44100.0,
             buffer_size,
+            enabled: false,
         })
     }
 
-    pub fn set_frequencies(&mut self, source_hz: f64, target_hz: f64) -> Result<()> {
+    pub fn set_frequencies(&mut self, source_hz: u32, target_hz: u32) -> Result<()> {
         use rubato::Resampler;
-        self.source_hz = source_hz;
-        self.target_hz = target_hz;
-        self.resampler
-            .set_resample_ratio(target_hz / source_hz, false)?;
+        self.enabled = source_hz != target_hz;
+        let ratio = f64::from(target_hz) / f64::from(source_hz);
+        self.resampler.set_resample_ratio(ratio, false)?;
         Ok(())
     }
 
     pub fn process<'a>(&'a mut self, samples: &'a [f32]) -> Result<&'a [f32]> {
         use rubato::Resampler;
 
-        if self.source_hz != self.target_hz {
+        if self.enabled {
             let left = samples.iter().copied().step_by(2).collect_vec();
             let right = samples.iter().copied().skip(1).step_by(2).collect_vec();
             let input = vec![left, right];
@@ -80,7 +78,7 @@ mod test {
         let floats2 = floats.clone().collect_vec().into_iter();
         let test_vec = floats.zip(floats2).flat_map(|(l, r)| [l, r]).collect_vec();
         eprintln!("{:?}", &test_vec[..20]);
-        resampler.set_frequencies(10.0, 20.0).unwrap();
+        resampler.set_frequencies(10, 20).unwrap();
 
         let result = resampler.process(&test_vec).unwrap();
         eprintln!("{:?}", &result[..20]);

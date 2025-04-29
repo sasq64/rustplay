@@ -4,7 +4,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use super::Value;
+use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct FileInfo {

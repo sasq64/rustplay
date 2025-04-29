@@ -10,10 +10,11 @@ use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
 use musix::MusicError;
 
+use crate::log;
 use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
+use crate::value::Value;
 use crate::{Settings, VisualizerPos};
-use crate::{log, value::*};
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode, KeyModifiers},
@@ -32,6 +33,14 @@ use song::{FileInfo, SongCollection};
 
 use indexer::RemoteIndexer;
 
+#[derive(Default, Debug, Clone, PartialEq)]
+enum InputMode {
+    #[default]
+    Main,
+    SearchInput,
+    ResultScreen,
+}
+
 #[derive(Default)]
 struct State {
     changed: bool,
@@ -41,7 +50,8 @@ struct State {
     len_msec: usize,
     done: bool,
     show_error: i32,
-    select_mode: bool,
+    mode: InputMode,
+    //select_mode: bool,
     quit: bool,
     use_color: bool,
     errors: VecDeque<String>,
@@ -196,7 +206,7 @@ impl RustPlay {
                 info_producer,
                 cmd_consumer,
                 msec,
-                data_dir,
+                &data_dir,
             )?),
             fft_pos: settings.args.visualizer,
             errors: VecDeque::new(),
@@ -265,7 +275,7 @@ impl RustPlay {
                     let song = cl.get(0);
                     log!("Staring with song {:?}", &song.path);
                     self.play_song(&song);
-                    self.state.player_started = true
+                    self.state.player_started = true;
                 }
             }
         }
@@ -292,12 +302,18 @@ impl RustPlay {
             self.templ.write(&self.state.meta, 0, 0)?;
         }
 
-        if self.state.select_mode {
+        if self.state.mode == InputMode::ResultScreen {
             self.menu_component.draw(&mut self.indexer)?;
             return Ok(());
         }
 
-        self.search_component.draw()?;
+        if self.state.mode == InputMode::SearchInput {
+            self.search_component.draw()?;
+        } else {
+            out.queue(cursor::MoveTo(0, self.search_component.ypos as u16 + 1))?
+                .queue(self.fg_color(Color::Grey))?
+                .queue(Print("[s] = search, [Ctrl-C] = quit, [n] = next"))?;
+        }
         out.queue(&black_bg)?;
 
         if self.indexer.working() {
@@ -317,8 +333,7 @@ impl RustPlay {
 
         if self.state.show_error > 0 {
             self.state.show_error -= 1;
-            let empty = "".to_string();
-            let err = self.state.errors.front().unwrap_or(&empty);
+            let err: &str = self.state.errors.front().map_or("", |s| s.as_str());
             out.queue(cursor::MoveTo(2, 1))?
                 .queue(self.fg_color(Color::Red))?
                 .queue(Print(err))?;
@@ -351,7 +366,7 @@ impl RustPlay {
     fn search(&mut self, query: &str) -> Result<()> {
         log!("Searching for {}", query);
         self.indexer.search(query)?;
-        self.state.select_mode = true;
+        self.state.mode = InputMode::SearchInput;
         Ok(())
     }
 
@@ -372,19 +387,29 @@ impl RustPlay {
                 let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
                 let mut handled = true;
                 match key.code {
-                    KeyCode::Char(d) if d.is_ascii_digit() && ctrl => {
-                        self.set_song(d.to_digit(10).unwrap())
-                    }
                     KeyCode::Char('c') if ctrl => self.state.quit = true,
-                    KeyCode::Char('n') if ctrl => self.next(),
-                    KeyCode::Char('p') if ctrl => self.prev(),
-                    KeyCode::Char('f') if ctrl => self.send_cmd(|player| player.ff(10000)),
                     KeyCode::Right => self.send_cmd(Player::next_song),
                     KeyCode::Left => self.send_cmd(Player::prev_song),
                     _ => handled = false,
                 }
                 if !handled {
-                    if self.state.select_mode {
+                    if self.state.mode == InputMode::Main {
+                        match key.code {
+                            KeyCode::Char(d) if d.is_ascii_digit() => {
+                                self.set_song(d.to_digit(10).unwrap());
+                            }
+                            KeyCode::Char('i' | 's') => self.state.mode = InputMode::SearchInput,
+                            KeyCode::Char('n') => self.next(),
+                            KeyCode::Char('p') => self.prev(),
+                            KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
+                            KeyCode::Right => self.send_cmd(Player::next_song),
+                            KeyCode::Left => self.send_cmd(Player::prev_song),
+                            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
+                                self.state.mode = InputMode::ResultScreen;
+                            }
+                            _ => {}
+                        }
+                    } else if self.state.mode == InputMode::ResultScreen {
                         match self.menu_component.handle_key(&mut self.indexer, key)? {
                             KeyReturn::PlaySong(song) => {
                                 self.current_list = self.indexer.get_song_result();
@@ -393,34 +418,34 @@ impl RustPlay {
                                 }
                                 self.play_song(&song);
                                 self.state.changed = true;
-                                self.state.select_mode = false;
+                                self.state.mode = InputMode::Main;
                             }
                             KeyReturn::ExitMenu => {
                                 self.state.changed = true;
-                                self.state.select_mode = false;
+                                self.state.mode = InputMode::SearchInput;
                             }
                             KeyReturn::Navigate => {
                                 self.state.changed = true;
-                                self.state.select_mode = false;
+                                self.state.mode = InputMode::SearchInput;
                                 self.search_component.handle_key(key)?;
                             }
                             _ => {}
                         }
-                    } else {
+                    } else if self.state.mode == InputMode::SearchInput {
                         match self.search_component.handle_key(key)? {
                             KeyReturn::Search(query) => {
                                 self.search(&query)?;
-                                self.state.select_mode = true;
+                                self.state.mode = InputMode::ResultScreen;
                                 self.menu_component.start_pos = 0;
                                 self.menu_component.selected = 0;
                             }
                             KeyReturn::ExitMenu => {
                                 self.state.changed = true;
-                                self.state.select_mode = true;
+                                self.state.mode = InputMode::Main;
                             }
                             KeyReturn::Navigate => {
                                 self.state.changed = true;
-                                self.state.select_mode = true;
+                                self.state.mode = InputMode::ResultScreen;
                                 self.menu_component.handle_key(&mut self.indexer, key)?;
                             }
                             _ => {}
@@ -443,7 +468,7 @@ impl RustPlay {
 
     pub fn play_song(&mut self, song: &FileInfo) {
         self.state.clear_meta();
-        for (name, val) in song.meta_data.iter() {
+        for (name, val) in &song.meta_data {
             log!("INDEX-META {name} = {val}");
             self.state.update_meta(name, val.clone());
         }
@@ -504,7 +529,7 @@ impl RustPlay {
         if !self.no_term {
             RustPlay::restore_term()?;
         }
-        if self.cmd_producer.send(Box::new(move |p| p.quit())).is_err() {
+        if self.cmd_producer.send(Box::new(Player::quit)).is_err() {
             return Err(MusicError {
                 msg: "Quit failed".into(),
             }

@@ -33,7 +33,7 @@ impl From<f64> for Value {
 
 impl From<i32> for Value {
     fn from(item: i32) -> Self {
-        Value::Number(item as f64)
+        Value::Number(f64::from(item))
     }
 }
 
