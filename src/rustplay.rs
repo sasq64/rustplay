@@ -407,6 +407,7 @@ impl RustPlay {
                     KeyCode::Char('c') if ctrl => self.state.quit = true,
                     KeyCode::Char('n') if ctrl => self.next(),
                     KeyCode::Char('p') if ctrl => self.prev(),
+                    KeyCode::Char('y') if ctrl => self.send_cmd(Player::play_pause),
                     KeyCode::Right => self.send_cmd(Player::next_song),
                     KeyCode::Left => self.send_cmd(Player::prev_song),
                     _ => handled = false,
@@ -420,6 +421,7 @@ impl RustPlay {
                             }
                             KeyCode::Char('i' | 's') => self.state.mode = InputMode::SearchInput,
                             KeyCode::Char('n') => self.next(),
+                            KeyCode::Char(' ') => self.send_cmd(Player::play_pause),
                             KeyCode::Char('p') => self.prev(),
                             KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
                             KeyCode::Right => self.send_cmd(Player::next_song),

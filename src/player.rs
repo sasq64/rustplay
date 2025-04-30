@@ -36,6 +36,15 @@ fn parse_mp3<R: Read>(reader: &mut R) -> io::Result<bool> {
     Ok(true)
 }
 
+#[derive(Default, Debug, PartialEq, Clone, Copy)]
+enum PlayState {
+    #[default]
+    Stopped,
+    Playing,
+    Paused,
+    Quitting
+}
+
 #[derive(Default, Debug)]
 #[allow(clippy::struct_field_names)]
 pub(crate) struct Player {
@@ -43,8 +52,7 @@ pub(crate) struct Player {
     song: i32,
     songs: i32,
     millis: Arc<AtomicUsize>,
-    playing: bool,
-    quitting: bool,
+    play_state: PlayState,
     ff_msec: usize,
     new_song: Option<PathBuf>,
 }
@@ -92,7 +100,7 @@ impl Player {
         self.chip_player = Some(musix::load_song(name)?);
         self.reset();
         self.new_song = Some(name.to_owned());
-        self.playing = true;
+        self.play_state = PlayState::Playing;
         Ok(true)
     }
 
@@ -103,8 +111,18 @@ impl Player {
     }
 
     #[allow(clippy::unnecessary_wraps)]
+    pub fn play_pause(&mut self) -> PlayResult {
+        self.play_state = match self.play_state {
+            PlayState::Paused => PlayState::Playing,
+            PlayState::Playing => PlayState::Paused,
+            _ => self.play_state
+        };
+        Ok(true)
+    }
+
+    #[allow(clippy::unnecessary_wraps)]
     pub fn quit(&mut self) -> PlayResult {
-        self.quitting = true;
+        self.play_state = PlayState::Quitting;
         Ok(true)
     }
 
@@ -225,9 +243,12 @@ pub(crate) fn run_player(
                 &config.into(),
                 move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
                     //info.timestamp().playback.duration_since(last_ts);
-                    audio_faucet.pop_slice(data);
-                    let ms = data.len() * 1000 / (playback_freq as usize * 2);
-                    msec.fetch_add(ms, Ordering::SeqCst);
+                    if audio_faucet.pop_slice(data) > 0 {
+                        let ms = data.len() * 1000 / (playback_freq as usize * 2);
+                        msec.fetch_add(ms, Ordering::SeqCst);
+                    } else {
+                        data.fill(0.0);
+                    }
                 },
                 |err| eprintln!("An error occurred on stream: {err}"),
                 None,
@@ -241,7 +262,7 @@ pub(crate) fn run_player(
                 ..Player::default()
             };
 
-            while !player.quitting {
+            while player.play_state != PlayState::Quitting {
                 while let Ok(cmd_fn) = cmd_consumer.try_recv() {
                     if let Err(e) = cmd_fn(&mut player) {
                         info_producer.push_value("error", e)?;
@@ -264,7 +285,7 @@ pub(crate) fn run_player(
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
                         }
-                    } else if audio_sink.vacant_len() > target.len() * 2 {
+                    } else if audio_sink.vacant_len() > target.len() * 2 && player.play_state == PlayState::Playing {
                         let rc = chip_player.get_samples(&mut target);
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
@@ -344,8 +365,7 @@ mod tests {
         let args = Args { ..Args::default() };
         let data = Path::new("data");
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, data.into())
-                .unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, data).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();
@@ -362,14 +382,9 @@ mod tests {
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
-        let player_thread = crate::player::run_player(
-            &args,
-            info_producer,
-            cmd_consumer,
-            msec,
-            Path::new("data").into(),
-        )
-        .unwrap();
+        let player_thread =
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, Path::new("data"))
+                .unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();
