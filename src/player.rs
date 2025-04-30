@@ -254,7 +254,7 @@ pub(crate) fn run_player(
                     if player.ff_msec > 0 {
                         let rc = chip_player.get_samples(&mut target);
 
-                        let ms = target.len() * 1000 / (plugin_freq as usize * 2);
+                        let ms = rc * 1000 / (plugin_freq as usize * 2);
                         if ms > player.ff_msec {
                             player.ff_msec = 0;
                         } else {
@@ -264,7 +264,7 @@ pub(crate) fn run_player(
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
                         }
-                    } else if audio_sink.vacant_len() > target.len() {
+                    } else if audio_sink.vacant_len() > target.len() * 2 {
                         let rc = chip_player.get_samples(&mut target);
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
@@ -285,6 +285,7 @@ pub(crate) fn run_player(
                         let new_samples = resampler.process(&samples)?;
                         audio_sink.push_slice(new_samples);
 
+                        assert!(rc == target.len());
                         if rc == target.len() {
                             let data = fft.run(&samples, playback_freq)?;
                             info_producer.push_value("fft", data)?;

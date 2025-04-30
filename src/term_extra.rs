@@ -5,6 +5,14 @@ use crossterm::{Command, event::KeyEvent};
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SetReverse(pub bool);
 
+pub struct TextSize(pub i32);
+
+impl Command for TextSize {
+    fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
+        write!(f, "\x1b]66;s={}\x07", self.0)
+    }
+}
+
 impl Command for SetReverse {
     fn write_ansi(&self, f: &mut impl fmt::Write) -> fmt::Result {
         if self.0 {

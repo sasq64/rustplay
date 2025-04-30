@@ -32,6 +32,12 @@ use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
 
+/// Log text to the '.rustplay.log' file
+///
+/// # Panics
+///
+/// Will panic if the mutex can not be locked (can not happen) or if
+/// the log file can not be written to.
 pub fn log(text: &str, file_name: &str, line: u32) {
     static LOG_FILE: LazyLock<Mutex<File>> = LazyLock::new(|| {
         let file = OpenOptions::new()
@@ -42,7 +48,7 @@ pub fn log(text: &str, file_name: &str, line: u32) {
         Mutex::new(file)
     });
     let mut log_file = LOG_FILE.lock().unwrap();
-    writeln!(log_file, "[{file_name}:{line}] {}", text).unwrap();
+    writeln!(log_file, "[{file_name}:{line}] {text}").unwrap();
     log_file.flush().unwrap();
 }
 

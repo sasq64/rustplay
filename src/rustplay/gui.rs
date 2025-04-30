@@ -26,25 +26,47 @@ pub struct SongMenu {
     pub start_pos: usize,
     pub selected: usize,
     pub height: usize,
+    pub fader: Vec<i32>,
+    pub use_color: bool,
 }
 
 impl SongMenu {
-    pub fn draw(&self, indexer: &mut RemoteIndexer) -> Result<()> {
+    fn fade(&self, i: usize) -> Color {
+        let x: u8 = (155 + self.fader[i] * 10) as u8;
+        Color::Rgb { r: x, g: x, b: x }
+    }
+
+    pub fn draw(&mut self, indexer: &mut RemoteIndexer) -> Result<()> {
+        if self.fader.len() != self.height {
+            self.fader.resize(self.height, 0);
+        }
         let mut out = stdout();
-        let normal_bg = SetReverse(false);
-        let cursor_bg = SetReverse(true);
         out.queue(Clear(ClearType::All))?;
         out.queue(cursor::MoveTo(0, 0))?;
         let start = self.start_pos;
         let songs = indexer.get_songs(start, start + self.height)?;
-        for (i, song) in songs.into_iter().enumerate() {
-            out.queue(if i == self.selected - start {
-                &cursor_bg
-            } else {
-                &normal_bg
-            })?
-            .queue(Print(song.full_song_name()))?
-            .queue(MoveToNextLine(1))?;
+        if self.use_color {
+            self.fader[self.selected - self.start_pos] = 10;
+            for (i, song) in songs.into_iter().enumerate() {
+                out.queue(SetForegroundColor(self.fade(i)))?
+                    .queue(Print(song.full_song_name()))?
+                    .queue(MoveToNextLine(1))?;
+                if self.fader[i] > 0 {
+                    self.fader[i] -= 1;
+                }
+            }
+        } else {
+            let normal_bg = SetReverse(false);
+            let cursor_bg = SetReverse(true);
+            for (i, song) in songs.into_iter().enumerate() {
+                out.queue(if i == self.selected - start {
+                    &cursor_bg
+                } else {
+                    &normal_bg
+                })?
+                .queue(Print(song.full_song_name()))?
+                .queue(MoveToNextLine(1))?;
+            }
         }
         out.flush()?;
         Ok(())
@@ -56,7 +78,7 @@ impl SongMenu {
         indexer: &mut RemoteIndexer,
         key: event::KeyEvent,
     ) -> Result<KeyReturn> {
-        let song_len = indexer.song_len();
+        let song_len = indexer.result_len();
         match key.code {
             KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
             KeyCode::Char(_) => return Ok(KeyReturn::Navigate),
@@ -102,6 +124,7 @@ impl SongMenu {
                 self.start_pos = song_len - self.height;
             }
         }
+
         Ok(KeyReturn::Nothing)
     }
 }

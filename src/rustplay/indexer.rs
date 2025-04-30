@@ -415,7 +415,7 @@ impl RemoteIndexer {
         indexer.result.get(index).cloned()
     }
 
-    pub fn song_len(&self) -> usize {
+    pub fn result_len(&self) -> usize {
         let indexer = self.lock();
         indexer.result.len()
     }
@@ -504,8 +504,8 @@ mod tests {
         indexer.add_path(&path).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(500));
         indexer.search("horace").unwrap();
-        assert!(indexer.song_len() == 1);
+        assert!(indexer.result_len() == 1);
         indexer.search("ninja").unwrap();
-        assert!(indexer.song_len() == 3);
+        assert!(indexer.result_len() == 3);
     }
 }

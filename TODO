@@ -8,7 +8,7 @@ V1 TODO
 [x] Fix double name for game music
 [x] Start playing all songs
 [x] Hide song count after done indexing
-[?] Make cargo installable
+[x] Make cargo installable
 [x] Catch c++ exceptions
 
 NICE FEATURES
@@ -27,11 +27,12 @@ ISSUES
 [ ] FFT delay for bluetooth
 [ ] Song count 0/empty
 [ ] Use 'zip' directly
+[ ] Open Startrekker with UADE
 
 VISUAL IMPROVEMENTS
 
 [ ] Pause time fade animation
-[ ] Fade search selector
+[?] Fade search selector
 [ ] File format color
 [ ] Scroll sub_title
 [ ] Fade/toggle sub title for tracker msg

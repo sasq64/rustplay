@@ -33,7 +33,7 @@ use song::{FileInfo, SongCollection};
 
 use indexer::RemoteIndexer;
 
-#[derive(Default, Debug, Clone, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq)]
 enum InputMode {
     #[default]
     Main,
@@ -51,11 +51,13 @@ struct State {
     done: bool,
     show_error: i32,
     mode: InputMode,
-    //select_mode: bool,
+    last_mode: InputMode,
     quit: bool,
     use_color: bool,
     errors: VecDeque<String>,
     player_started: bool,
+    width: i32,
+    height: i32,
 }
 
 impl State {
@@ -97,14 +99,17 @@ impl State {
 
     fn update_title(&mut self) {
         if self.changed {
-            let game = self.get_meta("game");
-            let title = self.get_meta("title");
-            let composer = self.get_meta_or("composer", "??");
-            let full_title = if game.is_empty() {
-                title.to_string()
-            } else {
-                game.to_string()
-            };
+            let game = self.get_meta("game").to_string();
+            let title = self.get_meta("title").to_string();
+            let composer = self.get_meta_or("composer", "??").to_string();
+            if game.is_empty() && title.is_empty() {
+                let fname = self.get_meta("file_name").to_string();
+                self.set_meta("title_and_composer", fname);
+                let fname = self.get_meta("file_name").to_string();
+                self.set_meta("full_title", fname);
+                return;
+            }
+            let full_title = if game.is_empty() { title } else { game };
             self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
             self.set_meta("full_title", full_title);
         }
@@ -144,7 +149,6 @@ pub(crate) struct RustPlay {
     msec: Arc<AtomicUsize>,
     player_thread: Option<JoinHandle<()>>,
     fft_pos: VisualizerPos,
-    errors: VecDeque<String>,
     state: State,
     height: usize,
     no_term: bool,
@@ -209,10 +213,11 @@ impl RustPlay {
                 &data_dir,
             )?),
             fft_pos: settings.args.visualizer,
-            errors: VecDeque::new(),
             state: State {
                 changed: true,
                 use_color: !settings.args.no_color,
+                width: i32::from(w),
+                height: th as i32,
                 ..State::default()
             },
             height: h.into(),
@@ -220,6 +225,7 @@ impl RustPlay {
             indexer,
             menu_component: gui::SongMenu {
                 height: h.into(),
+                use_color,
                 ..gui::SongMenu::default()
             },
             search_component: gui::SearchField::new(th),
@@ -334,7 +340,10 @@ impl RustPlay {
         if self.state.show_error > 0 {
             self.state.show_error -= 1;
             let err: &str = self.state.errors.front().map_or("", |s| s.as_str());
-            out.queue(cursor::MoveTo(2, 1))?
+            let x = self.state.width - err.len() as i32 - 2;
+            let y = self.state.height - 1;
+
+            out.queue(cursor::MoveTo(x as u16, y as u16))?
                 .queue(self.fg_color(Color::Red))?
                 .queue(Print(err))?;
             if self.state.show_error == 0 {
@@ -342,7 +351,13 @@ impl RustPlay {
                 self.state.changed = true;
             }
         } else if !self.state.errors.is_empty() {
-            self.state.show_error = 50;
+            let l = self.state.errors.len();
+            self.state.show_error = match l {
+                5.. => 1,
+                2..5 => 10,
+                _ => 50,
+            };
+            log!("Error for {} frames", self.state.show_error);
         }
 
         let play_time = self.msec.load(Ordering::SeqCst);
@@ -366,11 +381,13 @@ impl RustPlay {
     fn search(&mut self, query: &str) -> Result<()> {
         log!("Searching for {}", query);
         self.indexer.search(query)?;
-        self.state.mode = InputMode::SearchInput;
         Ok(())
     }
 
-    fn set_song(&mut self, song: u32) {
+    fn set_song(&mut self, mut song: u32) {
+        if song == 0 {
+            song = 10;
+        }
         self.send_cmd(move |player| player.set_song(song as i32));
     }
 
@@ -388,12 +405,15 @@ impl RustPlay {
                 let mut handled = true;
                 match key.code {
                     KeyCode::Char('c') if ctrl => self.state.quit = true,
+                    KeyCode::Char('n') if ctrl => self.next(),
+                    KeyCode::Char('p') if ctrl => self.prev(),
                     KeyCode::Right => self.send_cmd(Player::next_song),
                     KeyCode::Left => self.send_cmd(Player::prev_song),
                     _ => handled = false,
                 }
                 if !handled {
                     if self.state.mode == InputMode::Main {
+                        self.state.last_mode = InputMode::Main;
                         match key.code {
                             KeyCode::Char(d) if d.is_ascii_digit() => {
                                 self.set_song(d.to_digit(10).unwrap());
@@ -405,7 +425,10 @@ impl RustPlay {
                             KeyCode::Right => self.send_cmd(Player::next_song),
                             KeyCode::Left => self.send_cmd(Player::prev_song),
                             KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
-                                self.state.mode = InputMode::ResultScreen;
+                                if self.indexer.result_len() > 0 {
+                                    self.state.mode = InputMode::ResultScreen;
+                                    self.menu_component.handle_key(&mut self.indexer, key)?;
+                                }
                             }
                             _ => {}
                         }
@@ -418,11 +441,11 @@ impl RustPlay {
                                 }
                                 self.play_song(&song);
                                 self.state.changed = true;
-                                self.state.mode = InputMode::Main;
+                                self.state.mode = self.state.last_mode;
                             }
                             KeyReturn::ExitMenu => {
                                 self.state.changed = true;
-                                self.state.mode = InputMode::SearchInput;
+                                self.state.mode = self.state.last_mode;
                             }
                             KeyReturn::Navigate => {
                                 self.state.changed = true;
@@ -432,12 +455,18 @@ impl RustPlay {
                             _ => {}
                         }
                     } else if self.state.mode == InputMode::SearchInput {
+                        self.state.last_mode = InputMode::SearchInput;
                         match self.search_component.handle_key(key)? {
                             KeyReturn::Search(query) => {
                                 self.search(&query)?;
-                                self.state.mode = InputMode::ResultScreen;
-                                self.menu_component.start_pos = 0;
-                                self.menu_component.selected = 0;
+                                if self.indexer.result_len() > 0 {
+                                    self.state.mode = InputMode::ResultScreen;
+                                    self.menu_component.start_pos = 0;
+                                    self.menu_component.selected = 0;
+                                } else {
+                                    log!("Pushing error");
+                                    self.state.errors.push_back("No results from search".into());
+                                }
                             }
                             KeyReturn::ExitMenu => {
                                 self.state.changed = true;
@@ -445,8 +474,10 @@ impl RustPlay {
                             }
                             KeyReturn::Navigate => {
                                 self.state.changed = true;
-                                self.state.mode = InputMode::ResultScreen;
-                                self.menu_component.handle_key(&mut self.indexer, key)?;
+                                if self.indexer.result_len() > 0 {
+                                    self.state.mode = InputMode::ResultScreen;
+                                    self.menu_component.handle_key(&mut self.indexer, key)?;
+                                }
                             }
                             _ => {}
                         }
@@ -471,6 +502,10 @@ impl RustPlay {
         for (name, val) in &song.meta_data {
             log!("INDEX-META {name} = {val}");
             self.state.update_meta(name, val.clone());
+        }
+        if let Some(fname) = song.path().file_stem() {
+            let s = fname.to_string_lossy().to_string();
+            self.state.update_meta("file_name", Value::Text(s));
         }
         if let Some(next_song) = self.get_song(self.current_song + 1) {
             self.state
