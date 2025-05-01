@@ -206,7 +206,7 @@ impl Template {
                 }
                 let count = target.chars().count();
                 if count < maxl {
-                    target.extend(std::iter::repeat(' ').take(maxl - count));
+                    target.extend(std::iter::repeat_n(' ', maxl - count));
                 }
                 target
             })

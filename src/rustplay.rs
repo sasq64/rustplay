@@ -373,9 +373,7 @@ impl RustPlay {
     // The passed function is sent to the player thread for execution, so must be Send,
     // and also 'static since we have not tied it to the lifetime of the player.
     fn send_cmd(&mut self, f: impl FnOnce(&mut Player) -> PlayResult + Send + 'static) {
-        if self.cmd_producer.send(Box::new(f)).is_err() {
-            panic!("");
-        }
+        self.cmd_producer.send(Box::new(f)).expect("Only fails when other end has quit");
     }
 
     fn search(&mut self, query: &str) -> Result<()> {

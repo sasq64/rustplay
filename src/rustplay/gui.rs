@@ -249,7 +249,7 @@ impl SearchField {
                 return Ok(KeyReturn::Navigate);
             }
             _ => {}
-        };
+        }
         if search {
             let rc = KeyReturn::Search(self.shell.command());
             self.shell.clear();

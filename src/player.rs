@@ -45,8 +45,8 @@ enum PlayState {
     Quitting
 }
 
-#[derive(Default, Debug)]
 #[allow(clippy::struct_field_names)]
+#[derive(Default, Debug)]
 pub(crate) struct Player {
     chip_player: Option<ChipPlayer>,
     song: i32,
@@ -306,7 +306,6 @@ pub(crate) fn run_player(
                         let new_samples = resampler.process(&samples)?;
                         audio_sink.push_slice(new_samples);
 
-                        assert!(rc == target.len());
                         if rc == target.len() {
                             let data = fft.run(&samples, playback_freq)?;
                             info_producer.push_value("fft", data)?;

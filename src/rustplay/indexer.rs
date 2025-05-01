@@ -245,7 +245,7 @@ impl Indexer {
             QueryParser::for_index(&self.index, vec![self.title_field, self.composer_field]);
         query_parser.set_conjunction_by_default();
         let query = query_parser.parse_query(query)?;
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(10000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(100000))?;
 
         self.result.clear();
         for (_score, doc_address) in top_docs {
