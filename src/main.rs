@@ -7,16 +7,13 @@
 
 //! rustplay main file
 use std::{
-    cell::RefCell,
-    collections::HashMap,
     error::Error,
     fs::{File, OpenOptions},
     io::Write,
     panic,
     path::PathBuf,
     process,
-    rc::Rc,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
 
@@ -27,7 +24,6 @@ mod templ;
 mod term_extra;
 mod value;
 
-use rhai::FnPtr;
 use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
@@ -67,12 +63,6 @@ enum VisualizerPos {
     Below,
 }
 
-// impl Display for Visualizer {
-//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-//         f.write_str(format!("{:?}", self).as_str())
-//     }
-// }
-
 #[derive(Default, Parser, Debug, Clone)]
 #[command(version, about, author, long_about = None)]
 struct Args {
@@ -105,94 +95,11 @@ struct Args {
     no_color: bool,
 }
 
-#[derive(Clone, Debug, Default)]
-struct TemplateVar {
-    color: Option<u32>,
-    alias: Option<String>,
-    code: Option<FnPtr>,
-}
-
-trait DynamicVar {
-    fn generate(&self) -> String;
-}
-
-#[derive(Clone, Debug, Default)]
-struct Settings {
-    args: Args,
-    template: String,
-    width: i32,
-    variables: HashMap<String, TemplateVar>,
-}
-
 fn main() -> Result<(), Box<dyn Error>> {
     let orig_hook = panic::take_hook();
-    // Settings is passed to RHAI and needs static lifetime => Rc
-    // Needs to be modified by RHAI => RefCell (could be Cell)
-    let settings = Rc::new(RefCell::new(Settings {
-        args: Args::parse(),
-        width: -1,
-        ..Settings::default()
-    }));
+    let args = Args::parse();
 
-    let mut rhai_engine = rhai::Engine::new();
-
-    rhai_engine.register_fn("template", {
-        let settings = settings.clone();
-        move |t: &str| t.clone_into(&mut settings.borrow_mut().template)
-    });
-
-    rhai_engine
-        .register_fn("add_alias", {
-            let settings = settings.clone();
-            move |name: &str, alias: &str| {
-                let v = TemplateVar {
-                    alias: Some(alias.to_owned()),
-                    ..TemplateVar::default()
-                };
-                settings.borrow_mut().variables.insert(name.to_owned(), v);
-            }
-        })
-        .register_fn("add_alias", {
-            let settings = settings.clone();
-            move |name: &str, color: i64| {
-                let v = TemplateVar {
-                    color: Some(color as u32),
-                    ..TemplateVar::default()
-                };
-                settings.borrow_mut().variables.insert(name.to_owned(), v);
-            }
-        })
-        .register_fn("add_alias", {
-            let settings = settings.clone();
-            move |name: &str, alias: &str, color: i64| {
-                let v = TemplateVar {
-                    color: Some(color as u32),
-                    alias: Some(alias.to_owned()),
-                    ..TemplateVar::default()
-                };
-                settings.borrow_mut().variables.insert(name.to_owned(), v);
-            }
-        })
-        .register_fn("add_alias", {
-            let settings = settings.clone();
-            move |name: &str, code: FnPtr| {
-                let v = TemplateVar {
-                    code: Some(code),
-                    ..TemplateVar::default()
-                };
-                settings.borrow_mut().variables.insert(name.to_owned(), v);
-            }
-        });
-
-    let p = PathBuf::from("init.rhai");
-    if p.is_file() {
-        rhai_engine.run_file(p)?;
-    } else {
-        let script = include_str!("../init.rhai");
-        rhai_engine.run(script)?;
-    }
-
-    let mut rust_play = RustPlay::new(settings.borrow().clone())?;
+    let mut rust_play = RustPlay::new(args)?;
 
     panic::set_hook(Box::new(move |panic_info| {
         RustPlay::restore_term().expect("Could not restore terminal");
@@ -201,17 +108,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         orig_hook(panic_info);
         process::exit(1);
     }));
-
-    if settings.borrow().args.songs.is_empty() {
-        let test_song: PathBuf = "music.mod".into();
-        if test_song.is_file() {
-            settings.borrow_mut().args.songs.push(test_song);
-        }
-    }
-
-    for song in &settings.borrow().args.songs {
-        rust_play.add_path(song)?;
-    }
 
     loop {
         let do_quit = rust_play.handle_keys()?;

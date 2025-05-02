@@ -14,7 +14,7 @@ V1 TODO
 NICE FEATURES
 
 [ ] Random play
-[ ] Play/Pause
+[x] Play/Pause
 [ ] Size meta data
 [ ] Max errors, and show filename
 [ ] Favorites play list
@@ -26,7 +26,7 @@ ISSUES
 [ ] No FFT when sample data is non-power-of-two
 [ ] FFT delay for bluetooth
 [ ] Song count 0/empty
-[ ] Use 'zip' directly
+[x] Use 'zip' directly
 [x] Open Startrekker with UADE
 
 VISUAL IMPROVEMENTS

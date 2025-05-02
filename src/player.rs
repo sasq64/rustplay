@@ -327,6 +327,7 @@ pub(crate) fn run_player(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::path::Path;
     use std::sync::Arc;
@@ -340,7 +341,6 @@ mod tests {
     use super::Info;
 
     #[test]
-    #[allow(clippy::unwrap_used)]
     fn musix_works() {
         let data = Path::new("data");
         assert!(data.is_dir());
@@ -355,7 +355,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
     fn player_starts() {
         // Send commands to player
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
@@ -375,7 +374,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
     fn player_can_report_errors() {
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 

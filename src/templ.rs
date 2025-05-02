@@ -1,35 +1,22 @@
 use anyhow::Result;
-use crossterm::style::{Color, SetForegroundColor};
 use regex::Regex;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
 
-use std::io::{self, stdout};
-
-use crossterm::{QueueableCommand, cursor, style::Print};
-
-struct PlaceHolder {
+pub struct PlaceHolder {
     start: usize,
     end: usize,
-    col: usize,
-    len: usize,
-    line: usize,
-    color: u32,
+    pub col: usize,
+    pub len: usize,
+    pub line: usize,
+    pub color: u32,
 }
 
 pub struct Template {
     templ: Vec<String>,
-    use_color: bool,
     data: HashMap<String, PlaceHolder>,
-}
-
-fn color(color: u32) -> Color {
-    let r = (color >> 16) as u8;
-    let g = ((color >> 8) & 0xff) as u8;
-    let b = (color & 0xff) as u8;
-    Color::Rgb { r, g, b }
 }
 
 fn dup_lines(dup_indexes: &[usize], lines: &mut Vec<String>, h: usize) {
@@ -56,43 +43,15 @@ impl Template {
     pub fn height(&self) -> usize {
         self.templ.len()
     }
-    pub fn write<T: Display, Q: Hash + Eq + Borrow<str>>(
-        &self,
-        data: &HashMap<Q, T>,
-        x: u16,
-        y: u16,
-    ) -> io::Result<()> {
-        for (i, line) in self.templ.iter().enumerate() {
-            stdout()
-                .queue(cursor::MoveTo(x, y + i as u16))?
-                .queue(Print(line))?;
-        }
 
-        for (key, val) in data {
-            self.write_field(x, y, key.borrow(), val)?;
-        }
-        Ok(())
+    pub fn lines(&self) -> &Vec<String> {
+        &self.templ
     }
 
-    pub fn write_field<T: Display>(
-        &self,
-        x: u16,
-        y: u16,
-        key: &str,
-        val: &T,
-    ) -> io::Result<()> {
-        if let Some(ph) = self.data.get(key) {
-            let text = format!("{val}");
-            let l = usize::min(text.len(), ph.len);
-            if self.use_color {
-                stdout().queue(SetForegroundColor(color(ph.color)))?;
-            }
-            stdout()
-                .queue(cursor::MoveTo(x + ph.col as u16, y + ph.line as u16))?
-                .queue(Print(&text[..l]))?;
-        }
-        Ok(())
+    pub fn place_holders(&self) -> impl Iterator<Item = (&String, &PlaceHolder)> {
+        self.data.iter()
     }
+
 
     pub fn get_pos(&self, id: &str) -> Option<(u16, u16)> {
         if let Some(ph) = self.data.get(id) {
@@ -100,8 +59,6 @@ impl Template {
         }
         None
     }
-
-    // For testing?
 
     fn render<T: Display, Q: Hash + Eq + Borrow<str>>(
         &self,
@@ -129,10 +86,6 @@ impl Template {
     ) -> String {
         let result = self.render(data);
         result.join("\n")
-    }
-
-    pub fn set_use_color(&mut self, c: bool) {
-        self.use_color = c;
     }
 
     /// Template contains text or special patterns that are replaced;
@@ -268,14 +221,12 @@ impl Template {
         }
         Ok(Template {
             templ: lines,
-            use_color: false,
             data,
         })
     }
 
-    #[allow(clippy::unused_self)]  
-    pub fn set_vars(&mut self, _variables: HashMap<String, crate::TemplateVar>) {
-        //self.variables = variables;
+    pub(crate) fn get_placeholder(&self, key: &str) -> Option<&PlaceHolder> {
+        self.data.get(key)
     }
 }
 
