@@ -511,9 +511,9 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-utils"
-version = "0.8.20"
+version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22ec99545bb0ed0ea7bb9b8e1e9122ea386ff8a48c0922e43f36d45ab09e0e80"
+checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "crossterm"
@@ -619,17 +619,6 @@ dependencies = [
  "option-ext",
  "redox_users",
  "windows-sys 0.59.0",
-]
-
-[[package]]
-name = "displaydoc"
-version = "0.2.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97369cbbc041bc366949bc74d34658d6cda5621039731c6310521892a3a20ae0"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -1108,7 +1097,9 @@ checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 
 [[package]]
 name = "musix"
-version = "0.2.5"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68208345d416f6cdaa0672c02889d8b845c08d2e1287cd795624e167f9cf1d3f"
 dependencies = [
  "cc",
  "cmake",
@@ -1254,7 +1245,7 @@ dependencies = [
 
 [[package]]
 name = "oldplay"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1272,7 +1263,7 @@ dependencies = [
  "spectrum-analyzer",
  "tantivy",
  "walkdir",
- "zip-extract",
+ "zip",
 ]
 
 [[package]]
@@ -2581,9 +2572,9 @@ dependencies = [
 
 [[package]]
 name = "zip"
-version = "2.3.0"
+version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84e9a772a54b54236b9b744aaaf8d7be01b4d6e99725523cb82cb32d1c81b1d7"
+checksum = "1dcb24d0152526ae49b9b96c1dcf71850ca1e0b882e4e28ed898a93c41334744"
 dependencies = [
  "aes",
  "arbitrary",
@@ -2592,7 +2583,6 @@ dependencies = [
  "crc32fast",
  "crossbeam-utils",
  "deflate64",
- "displaydoc",
  "flate2",
  "getrandom 0.3.2",
  "hmac",
@@ -2601,23 +2591,11 @@ dependencies = [
  "memchr",
  "pbkdf2",
  "sha1",
- "thiserror 2.0.12",
  "time",
  "xz2",
  "zeroize",
  "zopfli",
  "zstd",
-]
-
-[[package]]
-name = "zip-extract"
-version = "0.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "25a8c9e90f27d1435088a7b540b6cc8ae6ee525d992a695f16012d2f365b3d3c"
-dependencies = [
- "log",
- "thiserror 1.0.61",
- "zip",
 ]
 
 [[package]]

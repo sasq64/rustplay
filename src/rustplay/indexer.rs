@@ -54,7 +54,6 @@ pub struct Indexer {
 
     song_list: VecDeque<FileInfo>,
     count: AtomicUsize,
-    working: AtomicBool,
     modland_formats: HashSet<&'static str>,
 }
 
@@ -84,7 +83,6 @@ impl Indexer {
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
         let composer_field = schema_builder.add_text_field("composer", TEXT | STORED);
         let path_field = schema_builder.add_text_field("path", STORED);
-        //let file_field = schema_builder.add_text_field("file_name", TEXT);
         let schema = schema_builder.build();
 
         let index = Index::create_in_ram(schema.clone());
@@ -95,7 +93,8 @@ impl Indexer {
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()?;
 
-        let modland_formats: HashSet<&str> = include_str!("modland_formats.txt").lines().collect();
+        let modland_formats: HashSet<&str> =
+            include_str!("modland_formats.txt").lines().collect();
 
         Ok(Self {
             schema,
@@ -106,10 +105,8 @@ impl Indexer {
             title_field,
             composer_field,
             path_field,
-            //file_field,
             song_list: VecDeque::new(),
             count: 0.into(),
-            working: AtomicBool::new(false),
             modland_formats,
         })
     }
@@ -133,8 +130,6 @@ impl Indexer {
         self.index_writer.add_document(doc!(
                 self.title_field => title,
                 self.composer_field => info.composer.clone(),
-                //self.file_field => song_path.file_name().context("No filename")?
-                //                    .to_str().unwrap(),
                 self.path_field => song_path.to_str().context("Illegal path")?
                                     .to_owned()))?;
         if self.song_list.len() < 100 {
@@ -245,7 +240,7 @@ impl Indexer {
             QueryParser::for_index(&self.index, vec![self.title_field, self.composer_field]);
         query_parser.set_conjunction_by_default();
         let query = query_parser.parse_query(query)?;
-        let top_docs = searcher.search(&query, &TopDocs::with_limit(100000))?;
+        let top_docs = searcher.search(&query, &TopDocs::with_limit(100_000))?;
 
         self.result.clear();
         for (_score, doc_address) in top_docs {
@@ -300,11 +295,23 @@ pub struct RemoteIndexer {
     indexer: Arc<Mutex<Indexer>>,
     sender: mpsc::Sender<Cmd>,
     index_thread: Option<JoinHandle<()>>,
+    working: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 enum Cmd {
     AddPath(PathBuf),
+    Quit,
+}
+
+impl Drop for RemoteIndexer {
+    fn drop(&mut self) {
+        self.working.store(false, Ordering::Relaxed);
+        let _ = self.sender.send(Cmd::Quit {});
+        if let Some(t) = self.index_thread.take() {
+            let _ = t.join();
+        }
+    }
 }
 
 impl RemoteIndexer {
@@ -314,7 +321,11 @@ impl RemoteIndexer {
         self.indexer.lock().unwrap()
     }
 
-    fn run(indexer: Arc<Mutex<Indexer>>, rx: Receiver<Cmd>) -> Result<()> {
+    fn run(
+        indexer: &Arc<Mutex<Indexer>>,
+        working: &Arc<AtomicBool>,
+        rx: &Receiver<Cmd>,
+    ) -> Result<()> {
         let non_songs: HashSet<String> = [
             "d71", "d81", "dfi", "d64", "1st", "exe", "hvs", "txt", "faq", "md5",
         ]
@@ -328,10 +339,16 @@ impl RemoteIndexer {
         loop {
             let cmd = rx.recv()?;
             match cmd {
+                Cmd::Quit => {
+                    break Ok(());
+                }
                 Cmd::AddPath(path) => {
                     let mut now = Instant::now();
-                    lock().working.store(true, Ordering::Relaxed);
+                    working.store(true, Ordering::Relaxed);
                     for entry in WalkDir::new(path) {
+                        if !working.load(Ordering::Relaxed) {
+                            break;
+                        }
                         let p = entry?;
                         if let Some(ext) = p.path().extension() {
                             let ext = ext.to_string_lossy().to_lowercase();
@@ -352,7 +369,7 @@ impl RemoteIndexer {
                         }
                     }
                     lock().commit()?;
-                    lock().working.store(false, Ordering::Relaxed);
+                    working.store(false, Ordering::Relaxed);
                 }
             }
         }
@@ -362,22 +379,26 @@ impl RemoteIndexer {
         let indexer = Arc::new(Mutex::new(Indexer::new()?));
         let (sender, rx) = mpsc::channel::<Cmd>();
 
+        let working = Arc::new(AtomicBool::new(false));
         let index_thread = Some({
             let indexer = indexer.clone();
+            let working = working.clone();
             thread::Builder::new()
                 .name("index_thread".into())
                 .spawn(move || {
-                    RemoteIndexer::run(indexer, rx).expect("Fail");
+                    RemoteIndexer::run(&indexer, &working, &rx).expect("Fail");
                 })?
         });
         Ok(RemoteIndexer {
             indexer,
             sender,
             index_thread,
+            working,
         })
     }
 
     pub fn add_path(&self, path: &Path) -> Result<()> {
+        self.working.store(true, Ordering::Relaxed);
         self.sender.send(Cmd::AddPath(path.to_owned()))?;
         Ok(())
     }
@@ -434,11 +455,12 @@ impl RemoteIndexer {
     }
 
     pub(crate) fn working(&self) -> bool {
-        self.indexer.lock().unwrap().working.load(Ordering::Relaxed)
+        self.working.load(Ordering::Relaxed)
     }
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use std::path::PathBuf;
 
@@ -449,7 +471,6 @@ mod tests {
     use super::Indexer;
 
     #[test]
-    #[allow(clippy::unwrap_used)]
     fn identify_works() {
         let path: PathBuf = "../musicplayer/music/C64/Ark_Pandora.sid".into();
         let info = Indexer::identify_song(&path).unwrap().unwrap();
@@ -457,7 +478,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
     fn normal_search_works() {
         let mut indexer = Indexer::new().unwrap();
         let path: PathBuf = "../musicplayer/music/C64/Ark_Pandora.sid".into();
@@ -497,15 +517,16 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unwrap_used)]
     fn threaded_search_works() {
         let mut indexer = RemoteIndexer::new().unwrap();
         let path: PathBuf = "../musicplayer/music".into();
         indexer.add_path(&path).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(500));
-        indexer.search("horace").unwrap();
-        assert!(indexer.result_len() == 1);
+        while indexer.working() {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        indexer.search("hymn").unwrap();
+        assert_eq!(indexer.result_len(), 1);
         indexer.search("ninja").unwrap();
-        assert!(indexer.result_len() == 3);
+        assert_eq!(indexer.result_len(), 3);
     }
 }

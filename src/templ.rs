@@ -74,7 +74,13 @@ impl Template {
         Ok(())
     }
 
-    pub fn write_field<T: Display>(&self, x: u16, y: u16, key: &str, val: &T) -> io::Result<()> {
+    pub fn write_field<T: Display>(
+        &self,
+        x: u16,
+        y: u16,
+        key: &str,
+        val: &T,
+    ) -> io::Result<()> {
         if let Some(ph) = self.data.get(key) {
             let text = format!("{val}");
             let l = usize::min(text.len(), ph.len);
@@ -97,7 +103,10 @@ impl Template {
 
     // For testing?
 
-    fn render<T: Display, Q: Hash + Eq + Borrow<str>>(&self, data: &HashMap<Q, T>) -> Vec<String> {
+    fn render<T: Display, Q: Hash + Eq + Borrow<str>>(
+        &self,
+        data: &HashMap<Q, T>,
+    ) -> Vec<String> {
         let mut result = self.templ.clone();
         for (key, val) in data {
             if let Some(ph) = self.data.get(key.borrow()) {
@@ -201,7 +210,10 @@ impl Template {
                     }
                     if cap.name("fill").is_some() {
                         dup_indexes.push(i);
-                        target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
+                        target.replace_range(
+                            m.start()..m.end(),
+                            &spaces[0..(m.end() - m.start())],
+                        );
                     }
                 }
                 let count = target.chars().count();
@@ -261,6 +273,7 @@ impl Template {
         })
     }
 
+    #[allow(clippy::unused_self)]  
     pub fn set_vars(&mut self, _variables: HashMap<String, crate::TemplateVar>) {
         //self.variables = variables;
     }

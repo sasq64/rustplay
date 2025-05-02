@@ -42,7 +42,7 @@ enum PlayState {
     Stopped,
     Playing,
     Paused,
-    Quitting
+    Quitting,
 }
 
 #[allow(clippy::struct_field_names)]
@@ -115,7 +115,7 @@ impl Player {
         self.play_state = match self.play_state {
             PlayState::Paused => PlayState::Playing,
             PlayState::Playing => PlayState::Paused,
-            _ => self.play_state
+            _ => self.play_state,
         };
         Ok(true)
     }
@@ -285,7 +285,9 @@ pub(crate) fn run_player(
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;
                         }
-                    } else if audio_sink.vacant_len() > target.len() * 2 && player.play_state == PlayState::Playing {
+                    } else if audio_sink.vacant_len() > target.len() * 2
+                        && player.play_state == PlayState::Playing
+                    {
                         let rc = chip_player.get_samples(&mut target);
                         if rc == 0 {
                             info_producer.push_value("done", 0)?;

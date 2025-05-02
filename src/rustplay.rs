@@ -1,8 +1,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, Cursor, Write as _, stdout};
-use std::panic;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
+use std::{fs, panic};
 use std::{path::Path, thread::JoinHandle};
 
 use anyhow::Result;
@@ -142,6 +142,36 @@ impl State {
     }
 }
 
+fn extract_zip(data_zip: &[u8], dd: &Path) {
+    let cursor = Cursor::new(data_zip);
+    let mut archive = zip::ZipArchive::new(cursor).unwrap();
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).unwrap();
+        let outpath = match file.enclosed_name() {
+            Some(path) => dd.join(path),
+            None => continue,
+        };
+        if file.is_dir() {
+            log!("File {} extracted to \"{}\"", i, outpath.display());
+            fs::create_dir_all(&outpath).unwrap();
+        } else {
+            log!(
+                "File {} extracted to \"{}\" ({} bytes)",
+                i,
+                outpath.display(),
+                file.size()
+            );
+            if let Some(p) = outpath.parent() {
+                if !p.exists() {
+                    fs::create_dir_all(p).unwrap();
+                }
+            }
+            let mut outfile = fs::File::create(&outpath).unwrap();
+            io::copy(&mut file, &mut outfile).unwrap();
+        }
+    }
+}
+
 pub(crate) struct RustPlay {
     cmd_producer: mpsc::Sender<Cmd>,
     info_consumer: mpsc::Receiver<(String, Value)>,
@@ -190,7 +220,7 @@ impl RustPlay {
         let data_dir = if let Some(cache_dir) = dirs::cache_dir() {
             let dd = cache_dir.join("oldplay-data");
             if !dd.exists() {
-                zip_extract::extract(Cursor::new(data_zip), &dd, false)?;
+                extract_zip(data_zip, &dd);
             }
             dd
         } else {
@@ -373,7 +403,9 @@ impl RustPlay {
     // The passed function is sent to the player thread for execution, so must be Send,
     // and also 'static since we have not tied it to the lifetime of the player.
     fn send_cmd(&mut self, f: impl FnOnce(&mut Player) -> PlayResult + Send + 'static) {
-        self.cmd_producer.send(Box::new(f)).expect("Only fails when other end has quit");
+        self.cmd_producer
+            .send(Box::new(f))
+            .expect("Only fails when other end has quit");
     }
 
     fn search(&mut self, query: &str) -> Result<()> {
