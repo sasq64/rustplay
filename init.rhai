@@ -16,6 +16,14 @@ template(`
 @TEXT=:#20e020
 `);
 
+let vars = #{
+  b: #{ alias: "song"},
+  a: #{ alias: "isong"},
+}
+
+let keys = #{
+}
+
 
 add_alias("b", "song");
 add_alias("a", "isong");

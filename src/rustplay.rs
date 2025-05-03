@@ -155,34 +155,28 @@ impl State {
     }
 }
 
-fn extract_zip(data_zip: &[u8], dd: &Path) {
+fn extract_zip(data_zip: &[u8], dd: &Path) -> Result<()> {
     let cursor = Cursor::new(data_zip);
-    let mut archive = zip::ZipArchive::new(cursor).unwrap();
+    let mut archive = zip::ZipArchive::new(cursor)?;
     for i in 0..archive.len() {
-        let mut file = archive.by_index(i).unwrap();
+        let mut file = archive.by_index(i)?;
         let outpath = match file.enclosed_name() {
             Some(path) => dd.join(path),
             None => continue,
         };
         if file.is_dir() {
-            log!("File {} extracted to \"{}\"", i, outpath.display());
-            fs::create_dir_all(&outpath).unwrap();
+            fs::create_dir_all(&outpath)?;
         } else {
-            log!(
-                "File {} extracted to \"{}\" ({} bytes)",
-                i,
-                outpath.display(),
-                file.size()
-            );
             if let Some(p) = outpath.parent() {
                 if !p.exists() {
-                    fs::create_dir_all(p).unwrap();
+                    fs::create_dir_all(p)?;
                 }
             }
-            let mut outfile = fs::File::create(&outpath).unwrap();
-            io::copy(&mut file, &mut outfile).unwrap();
+            let mut outfile = fs::File::create(&outpath)?;
+            io::copy(&mut file, &mut outfile)?;
         }
     }
+    Ok(())
 }
 
 fn color(color: u32) -> Color {
@@ -250,13 +244,13 @@ impl RustPlay {
 
         let data_zip = include_bytes!("oldplay.zip");
         let data_dir = if let Some(cache_dir) = dirs::cache_dir() {
-            let dd = cache_dir.join("oldplay-data");
-            if !dd.exists() {
-                extract_zip(data_zip, &dd);
+            let dest_dir = cache_dir.join("oldplay-data");
+            if !dest_dir.exists() {
+                extract_zip(data_zip, &dest_dir)?;
             }
-            dd
+            dest_dir
         } else {
-            dirs::home_dir().unwrap()
+            dirs::home_dir().expect("User must have a home dir")
         };
 
         let indexer = RemoteIndexer::new()?;
