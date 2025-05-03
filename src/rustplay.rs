@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::error::Error;
 use std::fmt::Display;
 use std::io::{self, Cursor, Write as _, stdout};
 use std::path::PathBuf;
@@ -43,7 +44,7 @@ use indexer::RemoteIndexer;
 pub struct TemplateVar {
     color: Option<u32>,
     alias: Option<String>,
-    code: Option<FnPtr>,
+    func: Option<FnPtr>,
 }
 
 #[derive(Default, Debug, Clone, Copy, PartialEq)]
@@ -179,7 +180,7 @@ fn extract_zip(data_zip: &[u8], dd: &Path) -> Result<()> {
     Ok(())
 }
 
-fn color(color: u32) -> Color {
+fn make_color(color: u32) -> Color {
     let r = (color >> 16) as u8;
     let g = ((color >> 8) & 0xff) as u8;
     let b = (color & 0xff) as u8;
@@ -209,7 +210,8 @@ pub(crate) struct RustPlay {
     current_list: Option<Box<dyn SongCollection>>,
     current_song: usize,
     rhai_engine: rhai::Engine,
-    shared_state: Rc<RefCell<SharedState>>
+    rhai_ast: rhai::AST,
+    shared_state: Rc<RefCell<SharedState>>,
 }
 impl RustPlay {
     pub fn new(args: Args) -> Result<RustPlay> {
@@ -230,7 +232,8 @@ impl RustPlay {
             ..SharedState::default()
         }));
 
-        let rhai_engine = RustPlay::setup_scripting(&shared_state)?;
+        let (rhai_engine, rhai_ast) =
+            RustPlay::setup_scripting(&shared_state).map_err(|e| anyhow!("RHAI Error: {:?}", e))?;
 
         let templ = Template::new(&shared_state.borrow().template, w as usize, 10)?;
         let use_color = !args.no_color;
@@ -306,27 +309,45 @@ impl RustPlay {
             current_list,
             current_song: 0,
             rhai_engine,
-            shared_state
+            rhai_ast,
+            shared_state,
         })
     }
 
-    fn setup_scripting(shared_state: &Rc<RefCell<SharedState>>) -> Result<rhai::Engine> {
+    fn setup_scripting(
+        shared_state: &Rc<RefCell<SharedState>>,
+    ) -> Result<(rhai::Engine, rhai::AST), Box<dyn Error>> {
         let mut rhai_engine = rhai::Engine::new();
 
-        rhai_engine.register_fn("template", {
-            let ss = shared_state.clone();
-            move |t: &str| t.clone_into(&mut ss.borrow_mut().template)
-        });
-
         rhai_engine
-            .register_fn("add_alias", {
+            .register_fn("template", {
                 let ss = shared_state.clone();
-                move |name: &str, alias: &str| {
-                    let v = TemplateVar {
-                        alias: Some(alias.to_owned()),
-                        ..TemplateVar::default()
-                    };
-                    ss.borrow_mut().variables.insert(name.to_owned(), v);
+                move |t: &str| t.clone_into(&mut ss.borrow_mut().template)
+            })
+            .register_fn("set_vars", {
+                let ss = shared_state.clone();
+                move |vars: rhai::Map| {
+                    for (key, val) in vars.into_iter() {
+                        log!("KEY: {key}");
+                        if val.is::<rhai::Map>() {
+                            let mut tvar = TemplateVar {
+                                ..Default::default()
+                            };
+                            log!("Found map");
+                            let m = val.cast::<rhai::Map>();
+                            for (key, val) in m.into_iter() {
+                                if key == "alias" {
+                                    tvar.alias = Some(val.cast::<String>());
+                                } else if key == "func" {
+                                    tvar.func = Some(val.cast::<FnPtr>());
+                                    log!("Func {:?}", tvar.func);
+                                } else if key == "color" {
+                                    tvar.color = Some(val.cast::<i64>() as u32);
+                                }
+                            }
+                            ss.borrow_mut().variables.insert(key.into(), tvar);
+                        }
+                    }
                 }
             })
             .register_fn("add_alias", {
@@ -354,7 +375,7 @@ impl RustPlay {
                 let ss = shared_state.clone();
                 move |name: &str, code: FnPtr| {
                     let v = TemplateVar {
-                        code: Some(code),
+                        func: Some(code),
                         ..TemplateVar::default()
                     };
                     ss.borrow_mut().variables.insert(name.to_owned(), v);
@@ -362,17 +383,14 @@ impl RustPlay {
             });
 
         let p = PathBuf::from("init.rhai");
-        if p.is_file() {
-            rhai_engine
-                .run_file(p)
-                .map_err(|e| anyhow!("RHAI error: {:?}", e))?;
+        let ast = if p.is_file() {
+            rhai_engine.compile_file(p)?
         } else {
             let script = include_str!("../init.rhai");
-            rhai_engine
-                .run(script)
-                .map_err(|e| anyhow!("RHAI error: {:?}", e))?;
-        }
-        Ok(rhai_engine)
+            rhai_engine.compile(script)?
+        };
+        rhai_engine.run_ast(&ast)?;
+        Ok((rhai_engine, ast))
     }
 
     fn setup_term() -> io::Result<()> {
@@ -411,7 +429,7 @@ impl RustPlay {
         if let Some(ph) = self.templ.get_placeholder(key) {
             if let Some(x) = self.shared_state.borrow().variables.get(key) {
                 if let Some(col) = x.color {
-                    stdout().queue(SetForegroundColor(color(col)))?;
+                    stdout().queue(SetForegroundColor(make_color(col)))?;
                 }
             }
             let text = format!("{val}");
@@ -463,11 +481,23 @@ impl RustPlay {
                 out.queue(cursor::MoveTo(0, i as u16))?.queue(Print(line))?;
             }
             for (name, ph) in self.templ.place_holders() {
+                let mut color: Option<&u32> = None;
+                let func: Option<&FnPtr> = None;
+                if let Some(tvar) = self.shared_state.borrow().variables.get(name) {
+                    color = tvar.color.as_ref();
+                    if let Some(func) = &tvar.func {
+                        let meta = self.state.meta.clone();
+                        let result = func
+                            .call::<String>(&self.rhai_engine, &self.rhai_ast, (meta,))
+                            .unwrap();
+                        log!("{result}");
+                    }
+                }
                 if let Some(val) = self.state.meta.get(name) {
                     let text = format!("{val}");
                     let l = usize::min(text.len(), ph.len);
                     if self.state.use_color {
-                        stdout().queue(SetForegroundColor(color(ph.color)))?;
+                        stdout().queue(SetForegroundColor(make_color(ph.color)))?;
                     }
                     stdout()
                         .queue(cursor::MoveTo(ph.col as u16, ph.line as u16))?

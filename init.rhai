@@ -1,5 +1,5 @@
 
-template(`
+let templ = `
  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$>━━━━━━━┓
  ┃ $title_and_composer                             $>       ┃
  ┃ $sub_title                                      $>       ┃
@@ -14,22 +14,25 @@ template(`
 @sub_title=:#a0a0a0
 @title_and_composer=:#ffffff
 @TEXT=:#20e020
-`);
+`;
 
 let vars = #{
-  b: #{ alias: "song"},
   a: #{ alias: "isong"},
-}
+  b: #{ alias: "song"},
+  fmt: #{ alias: "format"},
+  title: #{ func: title_and_composer},
+  count: #{ color: 0x808080 },
+  sub_title: #{ color: 0xa0a0a0 },
+};
+
+set_vars(vars);
 
 let keys = #{
-}
+};
+
+template(templ);
 
 
-add_alias("b", "song");
-add_alias("a", "isong");
-add_alias("count", 0x808080);
-add_alias("sub_title", 0xa0a0a0);
-// add_alias("full_name", |meta| meta.title + " / " + meta.composer)
 
 fn title_and_composer(meta) {
   if "title" in meta && "composer" in meta {
