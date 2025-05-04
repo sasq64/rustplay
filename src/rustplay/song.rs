@@ -18,7 +18,7 @@ impl FileInfo {
     }
 
     pub fn get(&self, what: &str) -> &Value {
-        self.meta_data.get(what).unwrap_or(&Value::Unknown())
+        self.meta_data.get(what).unwrap_or(&Value::Unknown)
     }
 
     pub fn title_and_composer(&self) -> String {
@@ -31,7 +31,7 @@ impl FileInfo {
         let title = self.get("title");
         let composer = self.get("composer");
         let file_name = self.path.file_name().map(|s| s.to_string_lossy());
-        if composer != &Value::Unknown() {
+        if composer != &Value::Unknown {
             if let Some(ext) = self.path.extension() {
                 return format!("{title} / {composer} [{}]", ext.to_string_lossy());
             }

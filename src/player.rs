@@ -198,9 +198,7 @@ pub(crate) fn run_player(
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
-    data_dir: &Path,
 ) -> Result<JoinHandle<()>> {
-    musix::init(data_dir)?;
 
     let device = cpal::default_host()
         .default_output_device()

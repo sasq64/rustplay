@@ -29,4 +29,5 @@ tantivy = "0.22.0"
 anyhow = "1.0"
 dirs = "6.0"
 zip = "2.6.1"
+smartstring = "1.0.1"
 

@@ -3,13 +3,14 @@ use std::fmt::Display;
 
 use musix::MusicError;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) enum Value {
     Text(String),
     Number(f64),
     Data(Vec<u8>),
     Error(MusicError),
-    Unknown(),
+    #[default]
+    Unknown,
 }
 
 impl Display for Value {
@@ -19,7 +20,7 @@ impl Display for Value {
             Value::Number(n) => write!(f, "{n:02}")?,
             Value::Error(e) => write!(f, "{e}")?,
             Value::Data(_) => write!(f, "Data")?,
-            Value::Unknown() => write!(f, "???")?,
+            Value::Unknown => write!(f, "???")?,
         }
         Ok(())
     }
@@ -58,5 +59,15 @@ impl From<Vec<u8>> for Value {
 impl From<MusicError> for Value {
     fn from(item: MusicError) -> Self {
         Value::Error(item)
+    }
+}
+
+impl From<Value> for rhai::Dynamic {
+    fn from(value: Value) -> Self {
+        match value {
+            Value::Text(t) => rhai::Dynamic::from(t),
+            Value::Number(n) => rhai::Dynamic::from(n),
+            _ => rhai::Dynamic::from_int(0),
+        }
     }
 }

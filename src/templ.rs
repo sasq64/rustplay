@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
 
+#[derive(Clone, Debug, Default)]
 pub struct PlaceHolder {
     start: usize,
     end: usize,
@@ -14,6 +15,7 @@ pub struct PlaceHolder {
     pub color: u32,
 }
 
+#[derive(Clone, Debug, Default)]
 pub struct Template {
     templ: Vec<String>,
     data: HashMap<String, PlaceHolder>,

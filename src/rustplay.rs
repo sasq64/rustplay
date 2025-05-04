@@ -1,21 +1,18 @@
-use std::cell::RefCell;
-use std::collections::{HashMap, VecDeque};
-use std::error::Error;
-use std::fmt::Display;
-use std::io::{self, Cursor, Write as _, stdout};
-use std::path::PathBuf;
-use std::rc::Rc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, mpsc};
-use std::{fs, panic};
-use std::{path::Path, thread::JoinHandle};
-
 use anyhow::Result;
-use anyhow::anyhow;
 use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
 use musix::MusicError;
 use rhai::FnPtr;
+use scripting::Scripting;
+use smartstring::{self, SmartString};
+use std::collections::{HashMap, VecDeque};
+use std::fmt::Display;
+use std::io::{self, Cursor, Write as _, stdout};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::{fs, panic};
+use std::{path::Path, thread::JoinHandle};
 
 use crate::VisualizerPos;
 use crate::player::{Cmd, Info, PlayResult, Player};
@@ -33,6 +30,7 @@ use crossterm::{
 mod gui;
 mod indexer;
 mod song;
+mod scripting;
 
 use crate::term_extra::{MaybeCommand, SetReverse};
 
@@ -105,7 +103,7 @@ impl State {
             Value::Error(ref e) => {
                 self.errors.push_back((*e).to_string());
             }
-            Value::Data(_) | Value::Unknown() => {}
+            Value::Data(_) | Value::Unknown => {}
         }
 
         self.meta.insert(meta.to_owned(), val);
@@ -187,12 +185,6 @@ fn make_color(color: u32) -> Color {
     Color::Rgb { r, g, b }
 }
 
-#[derive(Clone, Debug, Default)]
-pub(crate) struct SharedState {
-    template: String,
-    variables: HashMap<String, TemplateVar>,
-}
-
 pub(crate) struct RustPlay {
     cmd_producer: mpsc::Sender<Cmd>,
     info_consumer: mpsc::Receiver<(String, Value)>,
@@ -209,9 +201,7 @@ pub(crate) struct RustPlay {
     fft_component: gui::Fft,
     current_list: Option<Box<dyn SongCollection>>,
     current_song: usize,
-    rhai_engine: rhai::Engine,
-    rhai_ast: rhai::AST,
-    shared_state: Rc<RefCell<SharedState>>,
+    scripting: Scripting
 }
 impl RustPlay {
     pub fn new(args: Args) -> Result<RustPlay> {
@@ -227,15 +217,9 @@ impl RustPlay {
         }
 
         let (w, h) = terminal::size()?;
+        let scripting = Scripting::new().unwrap();
 
-        let shared_state = Rc::new(RefCell::new(SharedState {
-            ..SharedState::default()
-        }));
-
-        let (rhai_engine, rhai_ast) = RustPlay::setup_scripting(&shared_state)
-            .map_err(|e| anyhow!("RHAI Error: {:?}", e))?;
-
-        let templ = Template::new(&shared_state.borrow().template, w as usize, 10)?;
+        let templ = Template::new(&scripting.get_template(), w as usize, 10)?;
         let use_color = !args.no_color;
 
         let th = templ.height();
@@ -255,6 +239,8 @@ impl RustPlay {
         } else {
             dirs::home_dir().expect("User must have a home dir")
         };
+
+        musix::init(&data_dir)?;
 
         let indexer = RemoteIndexer::new()?;
 
@@ -281,7 +267,6 @@ impl RustPlay {
                 info_producer,
                 cmd_consumer,
                 msec,
-                &data_dir,
             )?),
             fft_pos: args.visualizer,
             state: State {
@@ -309,60 +294,9 @@ impl RustPlay {
             },
             current_list,
             current_song: 0,
-            rhai_engine,
-            rhai_ast,
-            shared_state,
+            scripting
         })
     }
-
-    fn setup_scripting(
-        shared_state: &Rc<RefCell<SharedState>>,
-    ) -> Result<(rhai::Engine, rhai::AST), Box<dyn Error>> {
-        let mut rhai_engine = rhai::Engine::new();
-
-        rhai_engine
-            .register_fn("template", {
-                let ss = shared_state.clone();
-                move |t: &str| t.clone_into(&mut ss.borrow_mut().template)
-            })
-            .register_fn("set_vars", {
-                let ss = shared_state.clone();
-                move |vars: rhai::Map| {
-                    for (key, val) in vars.into_iter() {
-                        log!("KEY: {key}");
-                        if let Some(m) = val.try_cast::<rhai::Map>() {
-                            let mut tvar = TemplateVar {
-                                ..Default::default()
-                            };
-                            log!("Found map");
-                            for (key, val) in m.into_iter() {
-                                if key == "alias" {
-                                    tvar.alias = val.try_cast::<String>();
-                                } else if key == "func" {
-                                    tvar.func = val.try_cast::<FnPtr>();
-                                    log!("Func {:?}", tvar.func);
-                                } else if key == "color" {
-                                    tvar.color = val.try_cast::<i64>().map(|i| i as u32);
-                                    log!("Color {:?}", tvar.color);
-                                }
-                            }
-                            ss.borrow_mut().variables.insert(key.into(), tvar);
-                        }
-                    }
-                }
-            });
-
-        let p = PathBuf::from("init.rhai");
-        let ast = if p.is_file() {
-            rhai_engine.compile_file(p)?
-        } else {
-            let script = include_str!("../init.rhai");
-            rhai_engine.compile(script)?
-        };
-        rhai_engine.run_ast(&ast)?;
-        Ok((rhai_engine, ast))
-    }
-
     fn setup_term() -> io::Result<()> {
         terminal::enable_raw_mode()?;
         stdout()
@@ -397,19 +331,56 @@ impl RustPlay {
 
     fn write_field(&self, key: &str, val: impl Display) -> Result<()> {
         if let Some(ph) = self.templ.get_placeholder(key) {
-            if let Some(x) = self.shared_state.borrow().variables.get(key) {
-                if let Some(col) = x.color {
-                    stdout().queue(SetForegroundColor(make_color(col)))?;
-                }
-            }
             let text = format!("{val}");
             let l = usize::min(text.len(), ph.len);
-            //if self.state.use_color {
-            //    stdout().queue(SetForegroundColor(color(ph.color)))?;
-            //}
             stdout()
                 .queue(cursor::MoveTo(ph.col as u16, ph.line as u16))?
                 .queue(Print(&text[..l]))?;
+        }
+        Ok(())
+    }
+
+    fn to_rhai_map<V: Clone + 'static>(hash_map: &HashMap<String, V>) -> rhai::Map {
+        hash_map
+            .iter()
+            .map(|(k, v)| (SmartString::from(k), rhai::Dynamic::from(v.clone())))
+            .collect::<rhai::Map>()
+    }
+
+    /// Draw the info panel with all song meta data
+    fn draw_info(&self) -> Result<()> {
+        let mut out = stdout();
+        out.queue(Clear(ClearType::All))?
+            .queue(self.fg_color(Color::Cyan))?;
+        for (i, line) in self.templ.lines().iter().enumerate() {
+            out.queue(cursor::MoveTo(0, i as u16))?.queue(Print(line))?;
+        }
+
+        let overrides = self.scripting.get_overrides(&self.state.meta).unwrap();
+
+        // TODO: Consider Rc<RefCell> to avoid full map clones below
+        //let rhai_map = RustPlay::to_rhai_map(&self.state.meta);
+        for (name, ph) in self.templ.place_holders() {
+            let mut color: u32 = ph.color;
+            let mut val: Option<Value> = None;
+
+            if let Some(o) = overrides.get(name) {
+                val = Some(o.value.clone());
+                color = o.color.unwrap_or(color);
+            }
+            if val.is_none() {
+                val = self.state.meta.get(name).cloned();
+            }
+            if let Some(v) = val {
+                let text = format!("{v}");
+                let l = usize::min(text.len(), ph.len);
+                if self.state.use_color {
+                    stdout().queue(SetForegroundColor(make_color(color)))?;
+                }
+                stdout()
+                    .queue(cursor::MoveTo(ph.col as u16, ph.line as u16))?
+                    .queue(Print(&text[..l]))?;
+            }
         }
         Ok(())
     }
@@ -443,42 +414,7 @@ impl RustPlay {
         out.queue(normal_bg)?.queue(&black_bg)?.flush()?;
         if self.state.changed {
             self.state.changed = false;
-            stdout()
-                .queue(Clear(ClearType::All))?
-                .queue(self.fg_color(Color::Cyan))?;
-            //self.templ.write(&self.state.meta, 0, 0)?;
-            for (i, line) in self.templ.lines().iter().enumerate() {
-                out.queue(cursor::MoveTo(0, i as u16))?.queue(Print(line))?;
-            }
-            let default_var = TemplateVar {
-                alias: None,
-                color: None,
-                func: None,
-            };
-            for (name, ph) in self.templ.place_holders() {
-                let mut color: Option<&u32> = None;
-                let func: Option<&FnPtr> = None;
-                if let Some(tvar) = self.shared_state.borrow().variables.get(name) {
-                    color = tvar.color.as_ref();
-                    if let Some(func) = &tvar.func {
-                        let meta = self.state.meta.clone();
-                        let result = func
-                            .call::<String>(&self.rhai_engine, &self.rhai_ast, (meta,))
-                            .unwrap();
-                        log!("{result}");
-                    }
-                }
-                if let Some(val) = self.state.meta.get(name) {
-                    let text = format!("{val}");
-                    let l = usize::min(text.len(), ph.len);
-                    if self.state.use_color {
-                        stdout().queue(SetForegroundColor(make_color(ph.color)))?;
-                    }
-                    stdout()
-                        .queue(cursor::MoveTo(ph.col as u16, ph.line as u16))?
-                        .queue(Print(&text[..l]))?;
-                }
-            }
+            self.draw_info()?;
         }
 
         if self.state.mode == InputMode::ResultScreen {
@@ -591,19 +527,14 @@ impl RustPlay {
                             KeyCode::Char(d) if d.is_ascii_digit() => {
                                 self.set_song(d.to_digit(10).unwrap());
                             }
-                            KeyCode::Char('i' | 's') => {
-                                self.state.mode = InputMode::SearchInput
-                            }
+                            KeyCode::Char('i' | 's') => self.state.mode = InputMode::SearchInput,
                             KeyCode::Char('n') => self.next(),
                             KeyCode::Char(' ') => self.send_cmd(Player::play_pause),
                             KeyCode::Char('p') => self.prev(),
                             KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
                             KeyCode::Right => self.send_cmd(Player::next_song),
                             KeyCode::Left => self.send_cmd(Player::prev_song),
-                            KeyCode::PageUp
-                            | KeyCode::PageDown
-                            | KeyCode::Up
-                            | KeyCode::Down => {
+                            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
                                 if self.indexer.result_len() > 0 {
                                     self.state.mode = InputMode::ResultScreen;
                                     self.menu_component.handle_key(&mut self.indexer, key)?;
@@ -644,9 +575,7 @@ impl RustPlay {
                                     self.menu_component.selected = 0;
                                 } else {
                                     log!("Pushing error");
-                                    self.state
-                                        .errors
-                                        .push_back("No results from search".into());
+                                    self.state.errors.push_back("No results from search".into());
                                 }
                             }
                             KeyReturn::ExitMenu => {
