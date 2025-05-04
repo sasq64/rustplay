@@ -232,8 +232,8 @@ impl RustPlay {
             ..SharedState::default()
         }));
 
-        let (rhai_engine, rhai_ast) =
-            RustPlay::setup_scripting(&shared_state).map_err(|e| anyhow!("RHAI Error: {:?}", e))?;
+        let (rhai_engine, rhai_ast) = RustPlay::setup_scripting(&shared_state)
+            .map_err(|e| anyhow!("RHAI Error: {:?}", e))?;
 
         let templ = Template::new(&shared_state.borrow().template, w as usize, 10)?;
         let use_color = !args.no_color;
@@ -257,7 +257,6 @@ impl RustPlay {
         };
 
         let indexer = RemoteIndexer::new()?;
-        let current_list = indexer.get_all_songs();
 
         if args.songs.is_empty() {
             let test_song: PathBuf = "music.mod".into();
@@ -269,6 +268,8 @@ impl RustPlay {
                 indexer.add_path(song)?;
             }
         }
+
+        let current_list = indexer.get_all_songs();
 
         Ok(RustPlay {
             cmd_producer,
@@ -329,56 +330,25 @@ impl RustPlay {
                 move |vars: rhai::Map| {
                     for (key, val) in vars.into_iter() {
                         log!("KEY: {key}");
-                        if val.is::<rhai::Map>() {
+                        if let Some(m) = val.try_cast::<rhai::Map>() {
                             let mut tvar = TemplateVar {
                                 ..Default::default()
                             };
                             log!("Found map");
-                            let m = val.cast::<rhai::Map>();
                             for (key, val) in m.into_iter() {
                                 if key == "alias" {
-                                    tvar.alias = Some(val.cast::<String>());
+                                    tvar.alias = val.try_cast::<String>();
                                 } else if key == "func" {
-                                    tvar.func = Some(val.cast::<FnPtr>());
+                                    tvar.func = val.try_cast::<FnPtr>();
                                     log!("Func {:?}", tvar.func);
                                 } else if key == "color" {
-                                    tvar.color = Some(val.cast::<i64>() as u32);
+                                    tvar.color = val.try_cast::<i64>().map(|i| i as u32);
+                                    log!("Color {:?}", tvar.color);
                                 }
                             }
                             ss.borrow_mut().variables.insert(key.into(), tvar);
                         }
                     }
-                }
-            })
-            .register_fn("add_alias", {
-                let ss = shared_state.clone();
-                move |name: &str, color: i64| {
-                    let v = TemplateVar {
-                        color: Some(color as u32),
-                        ..TemplateVar::default()
-                    };
-                    ss.borrow_mut().variables.insert(name.to_owned(), v);
-                }
-            })
-            .register_fn("add_alias", {
-                let ss = shared_state.clone();
-                move |name: &str, alias: &str, color: i64| {
-                    let v = TemplateVar {
-                        color: Some(color as u32),
-                        alias: Some(alias.to_owned()),
-                        ..TemplateVar::default()
-                    };
-                    ss.borrow_mut().variables.insert(name.to_owned(), v);
-                }
-            })
-            .register_fn("add_alias", {
-                let ss = shared_state.clone();
-                move |name: &str, code: FnPtr| {
-                    let v = TemplateVar {
-                        func: Some(code),
-                        ..TemplateVar::default()
-                    };
-                    ss.borrow_mut().variables.insert(name.to_owned(), v);
                 }
             });
 
@@ -480,6 +450,11 @@ impl RustPlay {
             for (i, line) in self.templ.lines().iter().enumerate() {
                 out.queue(cursor::MoveTo(0, i as u16))?.queue(Print(line))?;
             }
+            let default_var = TemplateVar {
+                alias: None,
+                color: None,
+                func: None,
+            };
             for (name, ph) in self.templ.place_holders() {
                 let mut color: Option<&u32> = None;
                 let func: Option<&FnPtr> = None;
@@ -616,14 +591,19 @@ impl RustPlay {
                             KeyCode::Char(d) if d.is_ascii_digit() => {
                                 self.set_song(d.to_digit(10).unwrap());
                             }
-                            KeyCode::Char('i' | 's') => self.state.mode = InputMode::SearchInput,
+                            KeyCode::Char('i' | 's') => {
+                                self.state.mode = InputMode::SearchInput
+                            }
                             KeyCode::Char('n') => self.next(),
                             KeyCode::Char(' ') => self.send_cmd(Player::play_pause),
                             KeyCode::Char('p') => self.prev(),
                             KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
                             KeyCode::Right => self.send_cmd(Player::next_song),
                             KeyCode::Left => self.send_cmd(Player::prev_song),
-                            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
+                            KeyCode::PageUp
+                            | KeyCode::PageDown
+                            | KeyCode::Up
+                            | KeyCode::Down => {
                                 if self.indexer.result_len() > 0 {
                                     self.state.mode = InputMode::ResultScreen;
                                     self.menu_component.handle_key(&mut self.indexer, key)?;
@@ -664,7 +644,9 @@ impl RustPlay {
                                     self.menu_component.selected = 0;
                                 } else {
                                     log!("Pushing error");
-                                    self.state.errors.push_back("No results from search".into());
+                                    self.state
+                                        .errors
+                                        .push_back("No results from search".into());
                                 }
                             }
                             KeyReturn::ExitMenu => {
