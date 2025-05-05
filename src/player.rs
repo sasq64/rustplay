@@ -362,8 +362,9 @@ mod tests {
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
         let data = Path::new("data");
+        musix::init(data).unwrap();
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, data).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();
@@ -379,8 +380,9 @@ mod tests {
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
+        musix::init(Path::new("data")).unwrap();
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, Path::new("data"))
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec)
                 .unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();

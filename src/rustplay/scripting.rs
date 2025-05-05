@@ -55,6 +55,8 @@ impl Scripting {
                 let ss = shared_state.clone();
                 move |t: &str| t.clone_into(&mut ss.borrow_mut().template)
             })
+            .register_fn("log", move |t: &str| log!("RHAI: {t}"))
+            .register_fn("log", move |t: &Value| log!("RHAI: {t}"))
             .register_fn("set_vars", {
                 let ss = shared_state.clone();
                 move |vars: rhai::Map| {

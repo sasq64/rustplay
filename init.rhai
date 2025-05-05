@@ -6,7 +6,7 @@ let templ = `
  ┣━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━$>━━━━━━━┫
  ┃ $time    / $len  ┃ SONG ┃ $a/$b ┃ FORMAT ┃ $fmt $> $count┃
  ┗━━━━━━━━━━━━━━━━━━┻━━━━━━┻━━━━━━━┻━━━━━━━━┻━━━━━━$>━━━━━━━┛
-  NEXT: $next_song                      $xtitle
+  NEXT: $xtitle
 @isong=a
 @songs=b
 @format=fmt
@@ -35,10 +35,16 @@ template(templ);
 
 
 fn title_and_composer(meta) {
-  if "title" in meta && "composer" in meta {
-    return `${meta.title} / ${meta.composer}`;
-  }
-  `${meta.file_name}`
+  log("START");
+  log(meta.title.to_string());
+  let title = if "game" in meta && meta.game != "" { 
+    meta.game.to_string()
+  } else { 
+    meta.title.to_string()
+  };
+  let composer = if meta.composer == "" { "" } else { ` / ${meta.composer}` };
+  if title == "" { title = meta.file_name.to_string() };
+  return title + composer;
 }
 
 
