@@ -6,7 +6,7 @@ let templ = `
  ┣━━━━━━━━━━━━━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━━┳━━━━━━$>━━━━━━━┫
  ┃ $time    / $len  ┃ SONG ┃ $a/$b ┃ FORMAT ┃ $fmt $> $count┃
  ┗━━━━━━━━━━━━━━━━━━┻━━━━━━┻━━━━━━━┻━━━━━━━━┻━━━━━━$>━━━━━━━┛
-  NEXT: $xtitle
+  NEXT: $next_song
 @isong=a
 @songs=b
 @format=fmt
@@ -20,9 +20,9 @@ let vars = #{
   a: #{ alias: "isong"},
   b: #{ alias: "song"},
   fmt: #{ alias: "format"},
-  xtitle: #{ func: title_and_composer},
+  sub_title: #{ color: 0xff0000 },
+  title_and_composer: #{ func: title_and_composer},
   count: #{ color: 0x808080 },
-  sub_title: #{ color: 0xa0a0a0 },
 };
 
 set_vars(vars);
@@ -43,7 +43,7 @@ fn title_and_composer(meta) {
     meta.title.to_string()
   };
   let composer = if meta.composer == "" { "" } else { ` / ${meta.composer}` };
-  if title == "" { title = meta.file_name.to_string() };
+  if title == "" { title = meta.file_name };
   return title + composer;
 }
 

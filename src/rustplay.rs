@@ -110,21 +110,21 @@ impl State {
     }
 
     fn update_title(&mut self) {
-        if self.changed {
-            let game = self.get_meta("game").to_string();
-            let title = self.get_meta("title").to_string();
-            let composer = self.get_meta_or("composer", "??").to_string();
-            if game.is_empty() && title.is_empty() {
-                let fname = self.get_meta("file_name").to_string();
-                self.set_meta("title_and_composer", fname);
-                let fname = self.get_meta("file_name").to_string();
-                self.set_meta("full_title", fname);
-                return;
-            }
-            let full_title = if game.is_empty() { title } else { game };
-            self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
-            self.set_meta("full_title", full_title);
-        }
+        // if self.changed {
+        //     let game = self.get_meta("game").to_string();
+        //     let title = self.get_meta("title").to_string();
+        //     let composer = self.get_meta_or("composer", "??").to_string();
+        //     if game.is_empty() && title.is_empty() {
+        //         let fname = self.get_meta("file_name").to_string();
+        //         self.set_meta("title_and_composer", fname);
+        //         let fname = self.get_meta("file_name").to_string();
+        //         self.set_meta("full_title", fname);
+        //         return;
+        //     }
+        //     let full_title = if game.is_empty() { title } else { game };
+        //     self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
+        //     self.set_meta("full_title", full_title);
+        // }
     }
 
     fn get_meta(&self, name: &str) -> &str {
@@ -359,13 +359,16 @@ impl RustPlay {
         let overrides = self.scripting.get_overrides(&self.state.meta).unwrap();
 
         // TODO: Consider Rc<RefCell> to avoid full map clones below
+
         //let rhai_map = RustPlay::to_rhai_map(&self.state.meta);
         for (name, ph) in self.templ.place_holders() {
             let mut color: u32 = ph.color;
             let mut val: Option<Value> = None;
 
             if let Some(o) = overrides.get(name) {
-                val = Some(o.value.clone());
+                if o.value != Value::Unknown {
+                    val = Some(o.value.clone());
+                }
                 color = o.color.unwrap_or(color);
             }
             if val.is_none() {
