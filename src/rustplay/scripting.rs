@@ -101,7 +101,7 @@ impl Scripting {
         })
     }
 
-    /// Ask the script for custom colors and values to meta data
+    /// Ask the script for custom colors and values to metadata
     pub fn get_overrides(
         &self,
         meta: &HashMap<String, Value>,

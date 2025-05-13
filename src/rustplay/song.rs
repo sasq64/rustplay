@@ -7,9 +7,9 @@ use std::{
 use crate::value::Value;
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct FileInfo {
+pub(crate) struct FileInfo {
     pub path: PathBuf,
-    pub meta_data: HashMap<String, Value>,
+    pub meta_data: HashMap<String, Value>
 }
 
 impl FileInfo {

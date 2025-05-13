@@ -33,6 +33,25 @@ let keys = #{
 template(templ);
 
 
+fn on_new_song(meta) {
+
+  // Update
+  log(meta.title.to_string());
+  let title = if "game" in meta && meta.game != "" { 
+    meta.game.to_string()
+  } else { 
+    meta.title.to_string()
+  };
+  let composer = if meta.composer == "" { "" } else { ` / ${meta.composer}` };
+  if title == "" { title = meta.file_name };
+  set_meta("title_and_composer", title + composer);
+
+}
+
+fn on_draw_screen() {
+
+}
+
 
 fn title_and_composer(meta) {
   log("START");

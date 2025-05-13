@@ -1,3 +1,4 @@
+use crate::Args;
 use std::{
     io::{self, Read},
     path::{Path, PathBuf},
@@ -10,14 +11,14 @@ use std::{
     time::Duration,
 };
 
-use cpal::{SampleFormat, SampleRate, traits::*};
+use cpal::traits::*;
 
 use fft::Fft;
 use id3::{Tag, TagLike};
 use itertools::Itertools;
 use ringbuf::{StaticRb, traits::*};
 
-use crate::{Args, log, resampler::Resampler, value::Value};
+use crate::{log, resampler::Resampler, value::Value};
 use anyhow::{Context, Result};
 use musix::{ChipPlayer, MusicError};
 
@@ -212,12 +213,12 @@ pub(crate) fn run_player(
     let sconf = configs
         .find(|conf| {
             conf.channels() == 2
-                && conf.sample_format() == SampleFormat::F32
+                && conf.sample_format() == cpal::SampleFormat::F32
                 && conf.max_sample_rate() >= cpal::SampleRate(44100)
                 && conf.min_sample_rate() <= cpal::SampleRate(44100)
         })
         .context("Could not find a compatible audio config")?;
-    let config = sconf.with_sample_rate(SampleRate(44100));
+    let config = sconf.with_sample_rate(cpal::SampleRate(44100));
     let playback_freq = 44100u32;
 
     let fft = Fft {
@@ -311,10 +312,10 @@ pub(crate) fn run_player(
                             info_producer.push_value("fft", data)?;
                         }
                     } else {
-                        std::thread::sleep(Duration::from_millis(10));
+                        thread::sleep(Duration::from_millis(10));
                     }
                 } else {
-                    std::thread::sleep(Duration::from_millis(100));
+                    thread::sleep(Duration::from_millis(100));
                 }
             }
             info_producer.push_value("quit", 1)?;

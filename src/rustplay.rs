@@ -4,7 +4,6 @@ use gui::KeyReturn;
 use musix::MusicError;
 use rhai::FnPtr;
 use scripting::Scripting;
-use smartstring::{self, SmartString};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::io::{self, Cursor, Write as _, stdout};
@@ -109,24 +108,6 @@ impl State {
         self.meta.insert(meta.to_owned(), val);
     }
 
-    fn update_title(&mut self) {
-        // if self.changed {
-        //     let game = self.get_meta("game").to_string();
-        //     let title = self.get_meta("title").to_string();
-        //     let composer = self.get_meta_or("composer", "??").to_string();
-        //     if game.is_empty() && title.is_empty() {
-        //         let fname = self.get_meta("file_name").to_string();
-        //         self.set_meta("title_and_composer", fname);
-        //         let fname = self.get_meta("file_name").to_string();
-        //         self.set_meta("full_title", fname);
-        //         return;
-        //     }
-        //     let full_title = if game.is_empty() { title } else { game };
-        //     self.set_meta("title_and_composer", format!("{full_title} / {composer}"));
-        //     self.set_meta("full_title", full_title);
-        // }
-    }
-
     fn get_meta(&self, name: &str) -> &str {
         if let Some(Value::Text(t)) = self.meta.get(name) {
             return t;
@@ -185,7 +166,7 @@ fn make_color(color: u32) -> Color {
     Color::Rgb { r, g, b }
 }
 
-pub(crate) struct RustPlay {
+pub struct RustPlay {
     cmd_producer: mpsc::Sender<Cmd>,
     info_consumer: mpsc::Receiver<(String, Value)>,
     templ: Template,
@@ -204,6 +185,10 @@ pub(crate) struct RustPlay {
     scripting: Scripting
 }
 impl RustPlay {
+    /// Create a new instance of `RustPlay` using parsed command line arguments in `args`.
+    ///
+    /// # Errors
+    ///
     pub fn new(args: Args) -> Result<RustPlay> {
         // Send commands to player
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
@@ -340,14 +325,7 @@ impl RustPlay {
         Ok(())
     }
 
-    fn to_rhai_map<V: Clone + 'static>(hash_map: &HashMap<String, V>) -> rhai::Map {
-        hash_map
-            .iter()
-            .map(|(k, v)| (SmartString::from(k), rhai::Dynamic::from(v.clone())))
-            .collect::<rhai::Map>()
-    }
-
-    /// Draw the info panel with all song meta data
+    /// Draw the info panel with all song metadata
     fn draw_info(&self) -> Result<()> {
         let mut out = stdout();
         out.queue(Clear(ClearType::All))?
@@ -481,8 +459,8 @@ impl RustPlay {
         Ok(())
     }
 
-    // The passed function is sent to the player thread for execution, so must be Send,
-    // and also 'static since we have not tied it to the lifetime of the player.
+    // The passed function is sent to the player thread for execution, so must be `Send`,
+    // and also `'static` since we have not tied it to the lifetime of the player.
     fn send_cmd(&mut self, f: impl (FnOnce(&mut Player) -> PlayResult) + Send + 'static) {
         self.cmd_producer
             .send(Box::new(f))
@@ -610,7 +588,7 @@ impl RustPlay {
         None
     }
 
-    pub fn play_song(&mut self, song: &FileInfo) {
+    pub(crate) fn play_song(&mut self, song: &FileInfo) {
         self.state.clear_meta();
         for (name, val) in &song.meta_data {
             log!("INDEX-META {name} = {val}");
@@ -625,7 +603,6 @@ impl RustPlay {
                 .update_meta("next_song", Value::Text(next_song.full_song_name()));
         }
 
-        self.state.update_title();
         let path = song.path().to_owned();
         self.send_cmd(move |player| player.load(&path));
     }
@@ -649,7 +626,8 @@ impl RustPlay {
         }
     }
 
-    pub fn update_meta(&mut self) {
+    /// Update rustplay, read any meta data from player etc
+    pub fn update(&mut self) {
         if self.state.done {
             self.next();
             self.state.done = false;
@@ -665,14 +643,19 @@ impl RustPlay {
             self.state.len_msec = (len * 1000.0) as usize;
         }
 
-        self.state.update_title();
     }
 
+    /// Add a path to the indexer
     pub fn add_path(&mut self, song: &Path) -> Result<()> {
         self.indexer.add_path(song)?;
         Ok(())
     }
 
+    /// Quit rustplay.
+    ///
+    /// # Panic
+    ///
+    /// Will panic if the player thread could not be joined.
     pub fn quit(&mut self) -> Result<()> {
         if !self.no_term {
             RustPlay::restore_term()?;
