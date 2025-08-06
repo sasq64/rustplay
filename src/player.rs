@@ -192,7 +192,10 @@ impl PushValue for mpsc::Sender<Info> {
 }
 
 const BUFFER_SIZE: usize = 4096 / 2;
-const PLAYBACK_FREQ: u32 = 44100;
+const PLAYBACK_FREQ_HZ: u32 = 44100;
+const RING_BUFFER_SIZE: usize = 8192;
+const AUDIO_THREAD_SLEEP_MS: u64 = 10;
+const IDLE_SLEEP_MS: u64 = 100;
 
 struct AudioConfig {
     device: cpal::Device,
@@ -214,41 +217,37 @@ fn setup_audio_device() -> Result<AudioConfig> {
         .find(|conf| {
             conf.channels() == 2
                 && conf.sample_format() == cpal::SampleFormat::F32
-                && conf.max_sample_rate() >= cpal::SampleRate(PLAYBACK_FREQ)
-                && conf.min_sample_rate() <= cpal::SampleRate(PLAYBACK_FREQ)
+                && conf.max_sample_rate() >= cpal::SampleRate(PLAYBACK_FREQ_HZ)
+                && conf.min_sample_rate() <= cpal::SampleRate(PLAYBACK_FREQ_HZ)
         })
         .context("Could not find a compatible audio config")?;
-    
-    let config = sconf.with_sample_rate(cpal::SampleRate(PLAYBACK_FREQ));
+
+    let config = sconf.with_sample_rate(cpal::SampleRate(PLAYBACK_FREQ_HZ));
 
     Ok(AudioConfig {
         device,
         config: config.into(),
-        playback_freq: PLAYBACK_FREQ,
+        playback_freq: PLAYBACK_FREQ_HZ,
         buffer_size: BUFFER_SIZE,
     })
 }
-
-const RING_BUFFER_SIZE: usize = 8192;
-const AUDIO_THREAD_SLEEP_MS: u64 = 10;
-const IDLE_SLEEP_MS: u64 = 100;
 
 fn run_audio_loop(
     audio_config: AudioConfig,
     fft: Fft,
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
-    msec_outside: Arc<AtomicUsize>,
     msec: Arc<AtomicUsize>,
-    msec_skip: Arc<AtomicUsize>,
-    playback_freq: u32,
-    buffer_size: usize,
 ) -> Result<()> {
+    let playback_freq = audio_config.playback_freq;
+    let buffer_size = audio_config.buffer_size;
+    let msec_outside = msec.clone();
+    let msec_skip = msec.clone();
     let ring = StaticRb::<f32, RING_BUFFER_SIZE>::default();
     let (mut audio_sink, mut audio_faucet) = ring.split();
 
     let mut resampler = Resampler::new(buffer_size / 2)?;
-    let mut plugin_freq = 44100u32;
+    let mut plugin_freq = PLAYBACK_FREQ_HZ;
 
     let stream = audio_config.device.build_output_stream(
         &audio_config.config,
@@ -295,7 +294,9 @@ fn run_audio_loop(
                 if rc == 0 {
                     info_producer.push_value("done", 0)?;
                 }
-            } else if audio_sink.vacant_len() > target.len() * 2 && player.play_state == PlayState::Playing {
+            } else if audio_sink.vacant_len() > target.len() * 2
+                && player.play_state == PlayState::Playing
+            {
                 // Normal playback mode
                 let rc = chip_player.get_samples(&mut target);
                 if rc == 0 {
@@ -331,7 +332,7 @@ fn run_audio_loop(
             thread::sleep(Duration::from_millis(IDLE_SLEEP_MS));
         }
     }
-    
+
     info_producer.push_value("quit", 1)?;
     Ok(())
 }
@@ -351,26 +352,11 @@ pub(crate) fn run_player(
         max_freq: args.max_freq as f32,
     };
 
-    let msec_outside = msec.clone();
-    let msec_skip = msec.clone();
     let info_producer_error = info_producer.clone();
-    
-    let playback_freq = audio_config.playback_freq;
-    let buffer_size = audio_config.buffer_size;
 
     Ok(thread::spawn(move || {
         let main = || -> Result<()> {
-            run_audio_loop(
-                audio_config,
-                fft,
-                info_producer,
-                cmd_consumer,
-                msec_outside,
-                msec,
-                msec_skip,
-                playback_freq,
-                buffer_size,
-            )
+            run_audio_loop(audio_config, fft, info_producer, cmd_consumer, msec)
         };
         if let Err(e) = main() {
             // Try to send error info back to main thread before terminating
