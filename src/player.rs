@@ -191,13 +191,17 @@ impl PushValue for mpsc::Sender<Info> {
     }
 }
 
-#[allow(clippy::too_many_lines)]
-pub(crate) fn run_player(
-    args: &Args,
-    mut info_producer: mpsc::Sender<Info>,
-    cmd_consumer: mpsc::Receiver<Cmd>,
-    msec: Arc<AtomicUsize>,
-) -> Result<JoinHandle<()>> {
+const BUFFER_SIZE: usize = 4096 / 2;
+const PLAYBACK_FREQ: u32 = 44100;
+
+struct AudioConfig {
+    device: cpal::Device,
+    config: cpal::StreamConfig,
+    playback_freq: u32,
+    buffer_size: usize,
+}
+
+fn setup_audio_device() -> Result<AudioConfig> {
     let device = cpal::default_host()
         .default_output_device()
         .context("No audio device available")?;
@@ -205,18 +209,141 @@ pub(crate) fn run_player(
     let mut configs = device
         .supported_output_configs()
         .context("Could not get audio configs")?;
-    let buffer_size = 4096 / 2;
 
     let sconf = configs
         .find(|conf| {
             conf.channels() == 2
                 && conf.sample_format() == cpal::SampleFormat::F32
-                && conf.max_sample_rate() >= cpal::SampleRate(44100)
-                && conf.min_sample_rate() <= cpal::SampleRate(44100)
+                && conf.max_sample_rate() >= cpal::SampleRate(PLAYBACK_FREQ)
+                && conf.min_sample_rate() <= cpal::SampleRate(PLAYBACK_FREQ)
         })
         .context("Could not find a compatible audio config")?;
-    let config = sconf.with_sample_rate(cpal::SampleRate(44100));
-    let playback_freq = 44100u32;
+    
+    let config = sconf.with_sample_rate(cpal::SampleRate(PLAYBACK_FREQ));
+
+    Ok(AudioConfig {
+        device,
+        config: config.into(),
+        playback_freq: PLAYBACK_FREQ,
+        buffer_size: BUFFER_SIZE,
+    })
+}
+
+const RING_BUFFER_SIZE: usize = 8192;
+const AUDIO_THREAD_SLEEP_MS: u64 = 10;
+const IDLE_SLEEP_MS: u64 = 100;
+
+fn run_audio_loop(
+    audio_config: AudioConfig,
+    fft: Fft,
+    mut info_producer: mpsc::Sender<Info>,
+    cmd_consumer: mpsc::Receiver<Cmd>,
+    msec_outside: Arc<AtomicUsize>,
+    msec: Arc<AtomicUsize>,
+    msec_skip: Arc<AtomicUsize>,
+    playback_freq: u32,
+    buffer_size: usize,
+) -> Result<()> {
+    let ring = StaticRb::<f32, RING_BUFFER_SIZE>::default();
+    let (mut audio_sink, mut audio_faucet) = ring.split();
+
+    let mut resampler = Resampler::new(buffer_size / 2)?;
+    let mut plugin_freq = 44100u32;
+
+    let stream = audio_config.device.build_output_stream(
+        &audio_config.config,
+        move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+            if audio_faucet.pop_slice(data) > 0 {
+                let ms = data.len() * 1000 / (playback_freq as usize * 2);
+                msec.fetch_add(ms, Ordering::SeqCst);
+            } else {
+                data.fill(0.0);
+            }
+        },
+        |err| eprintln!("An error occurred on stream: {err}"),
+        None,
+    )?;
+    stream.play()?;
+
+    let mut target: Vec<i16> = vec![0; buffer_size];
+    let mut player = Player {
+        millis: msec_outside,
+        ..Player::default()
+    };
+
+    while player.play_state != PlayState::Quitting {
+        // Process commands
+        while let Ok(cmd_fn) = cmd_consumer.try_recv() {
+            if let Err(e) = cmd_fn(&mut player) {
+                info_producer.push_value("error", e)?;
+            }
+        }
+
+        player.update_meta(&mut info_producer)?;
+
+        if let Some(chip_player) = &mut player.chip_player {
+            if player.ff_msec > 0 {
+                // Fast forward mode
+                let rc = chip_player.get_samples(&mut target);
+                let ms = rc * 1000 / (plugin_freq as usize * 2);
+                if ms > player.ff_msec {
+                    player.ff_msec = 0;
+                } else {
+                    player.ff_msec -= ms;
+                }
+                msec_skip.fetch_add(ms, Ordering::SeqCst);
+                if rc == 0 {
+                    info_producer.push_value("done", 0)?;
+                }
+            } else if audio_sink.vacant_len() > target.len() * 2 && player.play_state == PlayState::Playing {
+                // Normal playback mode
+                let rc = chip_player.get_samples(&mut target);
+                if rc == 0 {
+                    info_producer.push_value("done", 0)?;
+                }
+
+                // Handle frequency changes
+                let hz = chip_player.get_frequency();
+                if hz != plugin_freq {
+                    log!("Plugin freq: {hz}");
+                    plugin_freq = hz;
+                    resampler.set_frequencies(plugin_freq, playback_freq)?;
+                }
+
+                // Process and resample audio
+                let samples = target
+                    .iter()
+                    .take(rc)
+                    .map(|&s16| f32::from(s16) / 32767.0)
+                    .collect_vec();
+                let new_samples = resampler.process(&samples)?;
+                audio_sink.push_slice(new_samples);
+
+                // Run FFT analysis on full buffers
+                if rc == target.len() {
+                    let data = fft.run(&samples, playback_freq)?;
+                    info_producer.push_value("fft", data)?;
+                }
+            } else {
+                thread::sleep(Duration::from_millis(AUDIO_THREAD_SLEEP_MS));
+            }
+        } else {
+            thread::sleep(Duration::from_millis(IDLE_SLEEP_MS));
+        }
+    }
+    
+    info_producer.push_value("quit", 1)?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_lines)]
+pub(crate) fn run_player(
+    args: &Args,
+    info_producer: mpsc::Sender<Info>,
+    cmd_consumer: mpsc::Receiver<Cmd>,
+    msec: Arc<AtomicUsize>,
+) -> Result<JoinHandle<()>> {
+    let audio_config = setup_audio_device()?;
 
     let fft = Fft {
         divider: args.fft_div * 2,
@@ -227,97 +354,23 @@ pub(crate) fn run_player(
     let msec_outside = msec.clone();
     let msec_skip = msec.clone();
     let info_producer_error = info_producer.clone();
+    
+    let playback_freq = audio_config.playback_freq;
+    let buffer_size = audio_config.buffer_size;
 
     Ok(thread::spawn(move || {
-        let main = move || -> Result<()> {
-            let ring = StaticRb::<f32, 8192>::default();
-            let (mut audio_sink, mut audio_faucet) = ring.split();
-
-            let mut resampler = Resampler::new(buffer_size / 2)?;
-            let mut plugin_freq = 44100u32;
-
-            let stream = device.build_output_stream(
-                &config.into(),
-                move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                    //info.timestamp().playback.duration_since(last_ts);
-                    if audio_faucet.pop_slice(data) > 0 {
-                        let ms = data.len() * 1000 / (playback_freq as usize * 2);
-                        msec.fetch_add(ms, Ordering::SeqCst);
-                    } else {
-                        data.fill(0.0);
-                    }
-                },
-                |err| eprintln!("An error occurred on stream: {err}"),
-                None,
-            )?;
-            stream.play()?;
-
-            let mut target: Vec<i16> = vec![0; buffer_size];
-
-            let mut player = Player {
-                millis: msec_outside,
-                ..Player::default()
-            };
-
-            while player.play_state != PlayState::Quitting {
-                while let Ok(cmd_fn) = cmd_consumer.try_recv() {
-                    if let Err(e) = cmd_fn(&mut player) {
-                        info_producer.push_value("error", e)?;
-                    }
-                }
-
-                player.update_meta(&mut info_producer)?;
-
-                if let Some(chip_player) = &mut player.chip_player {
-                    if player.ff_msec > 0 {
-                        let rc = chip_player.get_samples(&mut target);
-
-                        let ms = rc * 1000 / (plugin_freq as usize * 2);
-                        if ms > player.ff_msec {
-                            player.ff_msec = 0;
-                        } else {
-                            player.ff_msec -= ms;
-                        }
-                        msec_skip.fetch_add(ms, Ordering::SeqCst);
-                        if rc == 0 {
-                            info_producer.push_value("done", 0)?;
-                        }
-                    } else if audio_sink.vacant_len() > target.len() * 2
-                        && player.play_state == PlayState::Playing
-                    {
-                        let rc = chip_player.get_samples(&mut target);
-                        if rc == 0 {
-                            info_producer.push_value("done", 0)?;
-                        }
-
-                        let hz = chip_player.get_frequency();
-                        if hz != plugin_freq {
-                            log!("Plugin freq: {hz}");
-                            plugin_freq = hz;
-                            resampler.set_frequencies(plugin_freq, playback_freq)?;
-                        }
-
-                        let samples = target
-                            .iter()
-                            .take(rc)
-                            .map(|&s16| f32::from(s16) / 32767.0)
-                            .collect_vec();
-                        let new_samples = resampler.process(&samples)?;
-                        audio_sink.push_slice(new_samples);
-
-                        if rc == target.len() {
-                            let data = fft.run(&samples, playback_freq)?;
-                            info_producer.push_value("fft", data)?;
-                        }
-                    } else {
-                        thread::sleep(Duration::from_millis(10));
-                    }
-                } else {
-                    thread::sleep(Duration::from_millis(100));
-                }
-            }
-            info_producer.push_value("quit", 1)?;
-            Ok(())
+        let main = || -> Result<()> {
+            run_audio_loop(
+                audio_config,
+                fft,
+                info_producer,
+                cmd_consumer,
+                msec_outside,
+                msec,
+                msec_skip,
+                playback_freq,
+                buffer_size,
+            )
         };
         if let Err(e) = main() {
             // Try to send error info back to main thread before terminating
