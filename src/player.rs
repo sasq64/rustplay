@@ -191,8 +191,6 @@ impl PushValue for mpsc::Sender<Info> {
     }
 }
 
-fn check_mp3() {}
-
 #[allow(clippy::too_many_lines)]
 pub(crate) fn run_player(
     args: &Args,
@@ -200,7 +198,6 @@ pub(crate) fn run_player(
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
 ) -> Result<JoinHandle<()>> {
-
     let device = cpal::default_host()
         .default_output_device()
         .context("No audio device available")?;
@@ -229,6 +226,7 @@ pub(crate) fn run_player(
 
     let msec_outside = msec.clone();
     let msec_skip = msec.clone();
+    let info_producer_error = info_producer.clone();
 
     Ok(thread::spawn(move || {
         let main = move || -> Result<()> {
@@ -236,7 +234,7 @@ pub(crate) fn run_player(
             let (mut audio_sink, mut audio_faucet) = ring.split();
 
             let mut resampler = Resampler::new(buffer_size / 2)?;
-            let mut plugin_freq = 32000u32;
+            let mut plugin_freq = 44100u32;
 
             let stream = device.build_output_stream(
                 &config.into(),
@@ -321,7 +319,14 @@ pub(crate) fn run_player(
             info_producer.push_value("quit", 1)?;
             Ok(())
         };
-        main().expect("Fail");
+        if let Err(e) = main() {
+            // Try to send error info back to main thread before terminating
+            let _ = info_producer_error.send((
+                "fatal_error".to_owned(),
+                format!("Audio thread error: {}", e).into(),
+            ));
+            log!("Audio thread terminated with error: {}", e);
+        }
     }))
 }
 
@@ -383,8 +388,7 @@ mod tests {
         let args = Args { ..Args::default() };
         musix::init(Path::new("data")).unwrap();
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec)
-                .unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();
