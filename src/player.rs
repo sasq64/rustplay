@@ -11,18 +11,72 @@ use std::{
     time::Duration,
 };
 
-use cpal::traits::*;
-
 use fft::Fft;
 use id3::{Tag, TagLike};
 use itertools::Itertools;
 use ringbuf::{StaticRb, traits::*};
 
 use crate::{log, resampler::Resampler, value::Value};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use musix::{ChipPlayer, MusicError};
 
+mod audio_device;
+mod cpal_device;
 mod fft;
+
+use audio_device::{AudioDevice, AudioCallback};
+use cpal_device::setup_audio_device;
+
+pub(crate) trait AudioBackend {
+    fn setup_audio_device(&self) -> Result<Box<dyn AudioDevice>>;
+}
+
+pub(crate) struct CpalBackend;
+
+impl AudioBackend for CpalBackend {
+    fn setup_audio_device(&self) -> Result<Box<dyn AudioDevice>> {
+        setup_audio_device()
+    }
+}
+
+pub(crate) struct NoSoundDevice {
+    buffer_size: usize,
+    playback_freq: u32,
+}
+
+impl NoSoundDevice {
+    pub fn new() -> Self {
+        Self {
+            buffer_size: 1024,
+            playback_freq: 44100,
+        }
+    }
+}
+
+impl AudioDevice for NoSoundDevice {
+    fn play(&mut self, _callback: AudioCallback) -> Result<()> {
+        // No-op: don't actually play audio
+        Ok(())
+    }
+
+    fn get_buffer_size(&self) -> usize {
+        self.buffer_size
+    }
+
+    fn get_playback_freq(&self) -> u32 {
+        self.playback_freq
+    }
+}
+
+pub(crate) struct NoSoundBackend
+{
+}
+
+impl AudioBackend for NoSoundBackend {
+    fn setup_audio_device(&self) -> Result<Box<dyn AudioDevice>> {
+        Ok(Box::new(NoSoundDevice::new()))
+    }
+}
 
 pub(crate) type PlayResult = Result<bool, MusicError>;
 
@@ -191,88 +245,18 @@ impl PushValue for mpsc::Sender<Info> {
     }
 }
 
-const BUFFER_SIZE: usize = 4096 / 2;
-const PLAYBACK_FREQ_HZ: u32 = 44100;
 const RING_BUFFER_SIZE: usize = 8192;
 const AUDIO_THREAD_SLEEP_MS: u64 = 10;
 const IDLE_SLEEP_MS: u64 = 100;
 
-type AudioCallback = Box<dyn FnMut(&mut [f32]) + Send>;
-
-trait AudioDevice {
-    fn play(&mut self, callback: AudioCallback) -> Result<()>;
-    fn get_buffer_size(&self) -> usize;
-    fn get_playback_freq(&self) -> u32;
-}
-
-struct CPalDevice {
-    device: cpal::Device,
-    config: cpal::StreamConfig,
-    playback_freq: u32,
-    buffer_size: usize,
-    stream: Option<cpal::Stream>,
-}
-
-impl AudioDevice for CPalDevice {
-    fn play(&mut self, mut callback: AudioCallback) -> Result<()> {
-        let stream = self.device.build_output_stream(
-            &self.config,
-            move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-                callback(data);
-            },
-            |err| eprintln!("An error occurred on stream: {err}"),
-            None,
-        )?;
-        stream.play()?;
-        self.stream = Some(stream);
-        Ok(())
-    }
-
-    fn get_buffer_size(&self) -> usize {
-        self.buffer_size
-    }
-
-    fn get_playback_freq(&self) -> u32 {
-        self.playback_freq
-    }
-}
-
-fn setup_audio_device() -> Result<Box<dyn AudioDevice>> {
-    let device = cpal::default_host()
-        .default_output_device()
-        .context("No audio device available")?;
-
-    let mut configs = device
-        .supported_output_configs()
-        .context("Could not get audio configs")?;
-
-    let sconf = configs
-        .find(|conf| {
-            conf.channels() == 2
-                && conf.sample_format() == cpal::SampleFormat::F32
-                && conf.max_sample_rate() >= cpal::SampleRate(PLAYBACK_FREQ_HZ)
-                && conf.min_sample_rate() <= cpal::SampleRate(PLAYBACK_FREQ_HZ)
-        })
-        .context("Could not find a compatible audio config")?;
-
-    let config = sconf.with_sample_rate(cpal::SampleRate(PLAYBACK_FREQ_HZ));
-
-    Ok(Box::new(CPalDevice {
-        device,
-        config: config.into(),
-        playback_freq: PLAYBACK_FREQ_HZ,
-        buffer_size: BUFFER_SIZE,
-        stream: None,
-    }))
-}
-
-fn run_audio_loop(
+fn run_audio_loop<B: AudioBackend>(
     fft: Fft,
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
+    backend: B,
 ) -> Result<()> {
-    let mut audio_device = setup_audio_device()?;
+    let mut audio_device = backend.setup_audio_device()?;
     let playback_freq = audio_device.get_playback_freq();
     let buffer_size = audio_device.get_buffer_size();
     let msec_outside = msec.clone();
@@ -281,7 +265,7 @@ fn run_audio_loop(
     let (mut audio_sink, mut audio_faucet) = ring.split();
 
     let mut resampler = Resampler::new(buffer_size / 2)?;
-    let mut plugin_freq = PLAYBACK_FREQ_HZ;
+    let mut plugin_freq = playback_freq;
 
     audio_device.play(Box::new(move |data: &mut [f32]| {
         if audio_faucet.pop_slice(data) > 0 {
@@ -365,12 +349,12 @@ fn run_audio_loop(
     Ok(())
 }
 
-#[allow(clippy::too_many_lines)]
-pub(crate) fn run_player(
+pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
     args: &Args,
     info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
+    backend: B,
 ) -> Result<JoinHandle<()>> {
     let fft = Fft {
         divider: args.fft_div * 2,
@@ -381,7 +365,9 @@ pub(crate) fn run_player(
     let info_producer_error = info_producer.clone();
 
     Ok(thread::spawn(move || {
-        let main = || -> Result<()> { run_audio_loop(fft, info_producer, cmd_consumer, msec) };
+        let main = || -> Result<()> {
+            run_audio_loop(fft, info_producer, cmd_consumer, msec, backend)
+        };
         if let Err(e) = main() {
             // Try to send error info back to main thread before terminating
             let _ = info_producer_error.send((
@@ -432,8 +418,10 @@ mod tests {
         let args = Args { ..Args::default() };
         let data = Path::new("data");
         musix::init(data).unwrap();
+        let backend = super::NoSoundBackend;
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend)
+                .unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();
@@ -450,8 +438,10 @@ mod tests {
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
         musix::init(Path::new("data")).unwrap();
+        let backend = super::NoSoundBackend;
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend)
+                .unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();

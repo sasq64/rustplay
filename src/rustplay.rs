@@ -252,6 +252,7 @@ impl RustPlay {
                 info_producer,
                 cmd_consumer,
                 msec,
+                crate::player::CpalBackend,
             )?),
             fft_pos: args.visualizer,
             state: State {
