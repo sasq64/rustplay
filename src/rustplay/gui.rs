@@ -105,11 +105,7 @@ impl SongMenu {
         }
 
         if self.selected < self.start_pos {
-            self.start_pos = if self.start_pos >= self.height {
-                self.start_pos - self.height
-            } else {
-                0
-            }
+            self.start_pos = self.start_pos.saturating_sub(self.height)
         } else if self.selected >= self.start_pos + self.height {
             self.start_pos += self.height;
         }
