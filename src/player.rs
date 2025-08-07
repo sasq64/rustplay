@@ -197,14 +197,47 @@ const RING_BUFFER_SIZE: usize = 8192;
 const AUDIO_THREAD_SLEEP_MS: u64 = 10;
 const IDLE_SLEEP_MS: u64 = 100;
 
-struct AudioConfig {
+type AudioCallback = Box<dyn FnMut(&mut [f32]) + Send>;
+
+trait AudioDevice {
+    fn play(&mut self, callback: AudioCallback) -> Result<()>;
+    fn get_buffer_size(&self) -> usize;
+    fn get_playback_freq(&self) -> u32;
+}
+
+struct CPalDevice {
     device: cpal::Device,
     config: cpal::StreamConfig,
     playback_freq: u32,
     buffer_size: usize,
+    stream: Option<cpal::Stream>,
 }
 
-fn setup_audio_device() -> Result<AudioConfig> {
+impl AudioDevice for CPalDevice {
+    fn play(&mut self, mut callback: AudioCallback) -> Result<()> {
+        let stream = self.device.build_output_stream(
+            &self.config,
+            move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+                callback(data);
+            },
+            |err| eprintln!("An error occurred on stream: {err}"),
+            None,
+        )?;
+        stream.play()?;
+        self.stream = Some(stream);
+        Ok(())
+    }
+
+    fn get_buffer_size(&self) -> usize {
+        self.buffer_size
+    }
+
+    fn get_playback_freq(&self) -> u32 {
+        self.playback_freq
+    }
+}
+
+fn setup_audio_device() -> Result<Box<dyn AudioDevice>> {
     let device = cpal::default_host()
         .default_output_device()
         .context("No audio device available")?;
@@ -224,23 +257,24 @@ fn setup_audio_device() -> Result<AudioConfig> {
 
     let config = sconf.with_sample_rate(cpal::SampleRate(PLAYBACK_FREQ_HZ));
 
-    Ok(AudioConfig {
+    Ok(Box::new(CPalDevice {
         device,
         config: config.into(),
         playback_freq: PLAYBACK_FREQ_HZ,
         buffer_size: BUFFER_SIZE,
-    })
+        stream: None,
+    }))
 }
 
 fn run_audio_loop(
-    audio_config: AudioConfig,
     fft: Fft,
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
 ) -> Result<()> {
-    let playback_freq = audio_config.playback_freq;
-    let buffer_size = audio_config.buffer_size;
+    let mut audio_device = setup_audio_device()?;
+    let playback_freq = audio_device.get_playback_freq();
+    let buffer_size = audio_device.get_buffer_size();
     let msec_outside = msec.clone();
     let msec_skip = msec.clone();
     let ring = StaticRb::<f32, RING_BUFFER_SIZE>::default();
@@ -249,20 +283,14 @@ fn run_audio_loop(
     let mut resampler = Resampler::new(buffer_size / 2)?;
     let mut plugin_freq = PLAYBACK_FREQ_HZ;
 
-    let stream = audio_config.device.build_output_stream(
-        &audio_config.config,
-        move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
-            if audio_faucet.pop_slice(data) > 0 {
-                let ms = data.len() * 1000 / (playback_freq as usize * 2);
-                msec.fetch_add(ms, Ordering::SeqCst);
-            } else {
-                data.fill(0.0);
-            }
-        },
-        |err| eprintln!("An error occurred on stream: {err}"),
-        None,
-    )?;
-    stream.play()?;
+    audio_device.play(Box::new(move |data: &mut [f32]| {
+        if audio_faucet.pop_slice(data) > 0 {
+            let ms = data.len() * 1000 / (playback_freq as usize * 2);
+            msec.fetch_add(ms, Ordering::SeqCst);
+        } else {
+            data.fill(0.0);
+        }
+    }))?;
 
     let mut target: Vec<i16> = vec![0; buffer_size];
     let mut player = Player {
@@ -344,8 +372,6 @@ pub(crate) fn run_player(
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
 ) -> Result<JoinHandle<()>> {
-    let audio_config = setup_audio_device()?;
-
     let fft = Fft {
         divider: args.fft_div * 2,
         min_freq: args.min_freq as f32,
@@ -355,9 +381,7 @@ pub(crate) fn run_player(
     let info_producer_error = info_producer.clone();
 
     Ok(thread::spawn(move || {
-        let main = || -> Result<()> {
-            run_audio_loop(audio_config, fft, info_producer, cmd_consumer, msec)
-        };
+        let main = || -> Result<()> { run_audio_loop(fft, info_producer, cmd_consumer, msec) };
         if let Err(e) = main() {
             // Try to send error info back to main thread before terminating
             let _ = info_producer_error.send((
