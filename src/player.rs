@@ -24,7 +24,7 @@ mod audio_device;
 mod cpal_device;
 mod fft;
 
-use audio_device::{AudioDevice, AudioCallback};
+use audio_device::{AudioCallback, AudioDevice};
 use cpal_device::setup_audio_device;
 
 pub(crate) trait AudioBackend {
@@ -68,9 +68,7 @@ impl AudioDevice for NoSoundDevice {
     }
 }
 
-pub(crate) struct NoSoundBackend
-{
-}
+pub(crate) struct NoSoundBackend {}
 
 impl AudioBackend for NoSoundBackend {
     fn setup_audio_device(&self) -> Result<Box<dyn AudioDevice>> {
@@ -100,7 +98,7 @@ enum PlayState {
     Quitting,
 }
 
-#[allow(clippy::struct_field_names)]
+// #[allow(clippy::struct_field_names)]
 #[derive(Default, Debug)]
 pub(crate) struct Player {
     chip_player: Option<ChipPlayer>,

@@ -13,7 +13,7 @@ debug = 1
 [dependencies]
 walkdir = "2"
 crossterm = "0.27.0"
-musix = "0.3.0"
+musix = "0.3.1"
 # musix = { path = "../musicplayer/" }
 rubato = "0.16.2"
 cpal = "0.15.3"
@@ -28,6 +28,6 @@ mp3-duration = "0.1.10"
 tantivy = "0.22.0"
 anyhow = "1.0"
 dirs = "6.0"
-zip = "2.6.1"
+zip = "5"
 smartstring = "1.0.1"
 
