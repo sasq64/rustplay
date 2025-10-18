@@ -16,7 +16,7 @@ use std::{
     path::PathBuf,
     process,
     rc::Rc,
-    sync::{Arc, LazyLock, Mutex},
+    sync::{LazyLock, Mutex},
     time::Duration,
 };
 
