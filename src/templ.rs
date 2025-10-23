@@ -23,6 +23,10 @@ pub struct Template {
     templ: Vec<String>,
     use_color: bool,
     data: HashMap<String, PlaceHolder>,
+    re: Regex,
+    renames: HashMap<String, String>,
+    colors: HashMap<String, u32>,
+    output: Vec<String>,
 }
 
 fn color(color: u32) -> Color {
@@ -62,7 +66,7 @@ impl Template {
         x: u16,
         y: u16,
     ) -> io::Result<()> {
-        for (i, line) in self.templ.iter().enumerate() {
+        for (i, line) in self.output.iter().enumerate() {
             stdout()
                 .queue(cursor::MoveTo(x, y + i as u16))?
                 .queue(Print(line))?;
@@ -74,13 +78,7 @@ impl Template {
         Ok(())
     }
 
-    pub fn write_field<T: Display>(
-        &self,
-        x: u16,
-        y: u16,
-        key: &str,
-        val: &T,
-    ) -> io::Result<()> {
+    pub fn write_field<T: Display>(&self, x: u16, y: u16, key: &str, val: &T) -> io::Result<()> {
         if let Some(ph) = self.data.get(key) {
             let text = format!("{val}");
             let l = usize::min(text.len(), ph.len);
@@ -103,10 +101,7 @@ impl Template {
 
     // For testing?
 
-    fn render<T: Display, Q: Hash + Eq + Borrow<str>>(
-        &self,
-        data: &HashMap<Q, T>,
-    ) -> Vec<String> {
+    fn render<T: Display, Q: Hash + Eq + Borrow<str>>(&self, data: &HashMap<Q, T>) -> Vec<String> {
         let mut result = self.templ.clone();
         for (key, val) in data {
             if let Some(ph) = self.data.get(key.borrow()) {
@@ -150,49 +145,61 @@ impl Template {
     ///
     /// Variable alias `@short_symbol = real_symbol`
     ///
-    pub fn new(templ: &str, w: usize, h: usize) -> Result<Template> {
-        let spaces = "                                                                   ";
+    pub fn new(templ: &str) -> Result<Template> {
         let alias_re = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?")?;
 
-        let mut data = HashMap::<String, PlaceHolder>::new();
-        let mut dup_indexes = Vec::new();
-
-        let mut renames: HashMap<&str, &str> = HashMap::new();
-        let mut colors: HashMap<&str, u32> = HashMap::new();
-
-        let maxl = w;
+        let mut renames: HashMap<String, String> = HashMap::new();
+        let mut colors: HashMap<String, u32> = HashMap::new();
 
         // Strip alias assignments from template
-        let lines: Vec<&str> = templ
+        let lines: Vec<String> = templ
             .lines()
             .filter(|line| {
                 if let Some(m) = alias_re.captures(line) {
                     if let Some(var) = m.get(1) {
                         if let Some(alias) = m.get(2) {
-                            renames.insert(alias.as_str(), var.as_str());
+                            renames.insert(alias.as_str().into(), var.as_str().into());
                         }
-                        if let Some(color) = m.get(4) {
-                            if let Ok(rgb) = u32::from_str_radix(color.as_str(), 16) {
-                                colors.insert(var.as_str(), rgb);
-                            }
+                        if let Some(color) = m.get(4)
+                            && let Ok(rgb) = u32::from_str_radix(color.as_str(), 16)
+                        {
+                            colors.insert(var.as_str().into(), rgb);
                         }
                     }
                     return false;
                 }
                 true
             })
+            .map(|line| line.to_string())
             .collect();
+
+        Ok(Template {
+            templ: lines,
+            use_color: false,
+            data: HashMap::<String, PlaceHolder>::new(),
+            re: Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))")?,
+            renames,
+            colors,
+            output: Vec::new(),
+        })
+    }
+
+    pub fn draw(&mut self, w: usize, h: usize) {
         // Find fill patterns ($> and $^), resize vertically and prepare for horizontal
-        let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))")?;
         // Captures: var = var_name, char = char to repeat for '$>',
         // fill = '^' for line dup
-        let mut lines: Vec<String> = lines
+        let mut dup_indexes = Vec::new();
+        let spaces = "                                                                   ";
+        let maxl = w;
+
+        let mut lines: Vec<String> = self
+            .templ
             .iter()
             .enumerate()
-            .map(|(i, &line)| {
+            .map(|(i, line)| {
                 //let mut target: Vec<char> = line.chars().collect();
                 let mut target = line.to_string();
-                for cap in re.captures_iter(line) {
+                for cap in self.re.captures_iter(&line) {
                     let m = cap.get(0).unwrap();
                     //println!("MATCH '{}'", m.as_str());
                     if let Some(x) = cap.name("char") {
@@ -210,10 +217,7 @@ impl Template {
                     }
                     if cap.name("fill").is_some() {
                         dup_indexes.push(i);
-                        target.replace_range(
-                            m.start()..m.end(),
-                            &spaces[0..(m.end() - m.start())],
-                        );
+                        target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
                     }
                 }
                 let count = target.chars().count();
@@ -231,24 +235,24 @@ impl Template {
         for (i, line) in lines.iter_mut().enumerate() {
             //let mut target: Vec<char> = line.chars().collect();
             let mut clears = Vec::new();
-            for cap in re.captures_iter(line) {
+            for cap in self.re.captures_iter(line) {
                 let m = cap.get(0).unwrap();
                 //println!("MATCH {}", m.as_str());
                 if let Some(x) = cap.name("var") {
                     let n: &str;
-                    if let Some(new_name) = renames.get(x.as_str()) {
+                    if let Some(new_name) = self.renames.get(x.as_str()) {
                         n = new_name;
                     } else {
                         n = x.as_str();
                     }
                     let mut color: u32 = 0xff_ff_ff;
-                    if let Some(new_color) = colors.get(x.as_str()) {
+                    if let Some(new_color) = self.colors.get(x.as_str()) {
                         color = *new_color;
                     }
 
                     let col = line[..m.start()].chars().count();
                     let len = line[m.start()..m.end()].chars().count();
-                    data.insert(
+                    self.data.insert(
                         n.to_owned(),
                         PlaceHolder {
                             start: m.start(),
@@ -266,14 +270,10 @@ impl Template {
                 line.replace_range(start..end, &spaces[0..(end - start)]);
             }
         }
-        Ok(Template {
-            templ: lines,
-            use_color: false,
-            data,
-        })
+        self.output = lines
     }
 
-    #[allow(clippy::unused_self)]  
+    #[allow(clippy::unused_self)]
     pub fn set_vars(&mut self, _variables: HashMap<String, crate::TemplateVar>) {
         //self.variables = variables;
     }
@@ -300,8 +300,8 @@ mod tests {
 
     #[test]
     fn template_works() {
-        let result = Template::new("Line $one\nX $x!\n---$>--", 10, 3).unwrap();
-        let text = result.as_string();
+        let templ = Template::new("Line $one\nX $x!\n---$>--").unwrap();
+        let text = templ.draw().as_string();
         assert!(compare(&text, "Line\nX   !\n----------"));
 
         assert!(result.data["one"].start == 5);

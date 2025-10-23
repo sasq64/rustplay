@@ -120,7 +120,7 @@ trait DynamicVar {
 struct Settings {
     args: Args,
     template: String,
-    width: i32,
+ .   width: i32,
     variables: HashMap<String, TemplateVar>,
 }
 

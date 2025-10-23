@@ -308,10 +308,10 @@ pub(crate) fn run_player(
                         let new_samples = resampler.process(&samples)?;
                         audio_sink.push_slice(new_samples);
 
-                        if rc == target.len() {
-                            let data = fft.run(&samples, playback_freq)?;
-                            info_producer.push_value("fft", data)?;
-                        }
+                        //if rc == target.len() {
+                        let data = fft.run(&samples, playback_freq)?;
+                        info_producer.push_value("fft", data)?;
+                        //}
                     } else {
                         std::thread::sleep(Duration::from_millis(10));
                     }

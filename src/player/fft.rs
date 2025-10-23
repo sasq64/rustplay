@@ -17,8 +17,11 @@ impl Fft {
             .chunks(self.divider)
             .map(|a| a.iter().sum())
             .collect();
-
-        let window = hann_window(&mix);
+        // Pad to next power of two
+        let fft_size = mix.len().next_power_of_two();
+        let mut padded = mix.clone();
+        padded.resize(fft_size, 0.0);
+        let window = hann_window(&padded);
         let spectrum = samples_fft_to_spectrum(
             &window,
             freq,
