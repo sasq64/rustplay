@@ -481,6 +481,15 @@ impl RustPlay {
         self.send_cmd(move |player| player.set_song(song as i32));
     }
 
+    fn handle_resize(&mut self, width: u16, height: u16) {
+        self.state.width = width as i32;
+        self.state.height = height as i32;
+        self.state.changed = true;
+        self.height = height as usize;
+
+        // Template will be redrawn on next render with new size
+    }
+
     pub fn handle_keys(&mut self) -> Result<bool> {
         if self.no_term {
             return Ok(false);
@@ -489,93 +498,100 @@ impl RustPlay {
         if !event::poll(ms)? {
             return Ok(false);
         }
-        if let Event::Key(key) = event::read()? {
-            if key.kind == event::KeyEventKind::Press {
-                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                let mut handled = true;
-                match key.code {
-                    KeyCode::Char('c') if ctrl => self.state.quit = true,
-                    KeyCode::Char('n') if ctrl => self.next(),
-                    KeyCode::Char('p') if ctrl => self.prev(),
-                    KeyCode::Char('y') if ctrl => self.send_cmd(Player::play_pause),
-                    KeyCode::Right => self.send_cmd(Player::next_song),
-                    KeyCode::Left => self.send_cmd(Player::prev_song),
-                    _ => handled = false,
-                }
-                if !handled {
-                    if self.state.mode == InputMode::Main {
-                        self.state.last_mode = InputMode::Main;
-                        match key.code {
-                            KeyCode::Char(d) if d.is_ascii_digit() => {
-                                self.set_song(d.to_digit(10).unwrap());
-                            }
-                            KeyCode::Char('i' | 's') => self.state.mode = InputMode::SearchInput,
-                            KeyCode::Char('n') => self.next(),
-                            KeyCode::Char(' ') => self.send_cmd(Player::play_pause),
-                            KeyCode::Char('p') => self.prev(),
-                            KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
-                            KeyCode::Right => self.send_cmd(Player::next_song),
-                            KeyCode::Left => self.send_cmd(Player::prev_song),
-                            KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
-                                if self.indexer.result_len() > 0 {
-                                    self.state.mode = InputMode::ResultScreen;
-                                    self.menu_component.handle_key(&mut self.indexer, key)?;
+        let e = event::read()?;
+        match e {
+            Event::Resize(width, height) => {
+                self.handle_resize(width, height);
+            }
+            Event::Key(key) => {
+                if key.kind == event::KeyEventKind::Press {
+                    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+                    let mut handled = true;
+                    match key.code {
+                        KeyCode::Char('c') if ctrl => self.state.quit = true,
+                        KeyCode::Char('n') if ctrl => self.next(),
+                        KeyCode::Char('p') if ctrl => self.prev(),
+                        KeyCode::Char('y') if ctrl => self.send_cmd(Player::play_pause),
+                        KeyCode::Right => self.send_cmd(Player::next_song),
+                        KeyCode::Left => self.send_cmd(Player::prev_song),
+                        _ => handled = false,
+                    }
+                    if !handled {
+                        if self.state.mode == InputMode::Main {
+                            self.state.last_mode = InputMode::Main;
+                            match key.code {
+                                KeyCode::Char(d) if d.is_ascii_digit() => {
+                                    self.set_song(d.to_digit(10).unwrap());
                                 }
-                            }
-                            _ => {}
-                        }
-                    } else if self.state.mode == InputMode::ResultScreen {
-                        match self.menu_component.handle_key(&mut self.indexer, key)? {
-                            KeyReturn::PlaySong(song) => {
-                                self.current_list = self.indexer.get_song_result();
-                                if let Some(cl) = &self.current_list {
-                                    self.current_song = cl.index_of(&song).unwrap_or(0);
+                                KeyCode::Char('i' | 's') => self.state.mode = InputMode::SearchInput,
+                                KeyCode::Char('n') => self.next(),
+                                KeyCode::Char(' ') => self.send_cmd(Player::play_pause),
+                                KeyCode::Char('p') => self.prev(),
+                                KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
+                                KeyCode::Right => self.send_cmd(Player::next_song),
+                                KeyCode::Left => self.send_cmd(Player::prev_song),
+                                KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
+                                    if self.indexer.result_len() > 0 {
+                                        self.state.mode = InputMode::ResultScreen;
+                                        self.menu_component.handle_key(&mut self.indexer, key)?;
+                                    }
                                 }
-                                self.play_song(&song);
-                                self.state.changed = true;
-                                self.state.mode = self.state.last_mode;
+                                _ => {}
                             }
-                            KeyReturn::ExitMenu => {
-                                self.state.changed = true;
-                                self.state.mode = self.state.last_mode;
-                            }
-                            KeyReturn::Navigate => {
-                                self.state.changed = true;
-                                self.state.mode = InputMode::SearchInput;
-                                self.search_component.handle_key(key)?;
-                            }
-                            _ => {}
-                        }
-                    } else if self.state.mode == InputMode::SearchInput {
-                        self.state.last_mode = InputMode::SearchInput;
-                        match self.search_component.handle_key(key)? {
-                            KeyReturn::Search(query) => {
-                                self.search(&query)?;
-                                if self.indexer.result_len() > 0 {
-                                    self.state.mode = InputMode::ResultScreen;
-                                    self.menu_component.start_pos = 0;
-                                    self.menu_component.selected = 0;
-                                } else {
-                                    log!("Pushing error");
-                                    self.state.errors.push_back("No results from search".into());
+                        } else if self.state.mode == InputMode::ResultScreen {
+                            match self.menu_component.handle_key(&mut self.indexer, key)? {
+                                KeyReturn::PlaySong(song) => {
+                                    self.current_list = self.indexer.get_song_result();
+                                    if let Some(cl) = &self.current_list {
+                                        self.current_song = cl.index_of(&song).unwrap_or(0);
+                                    }
+                                    self.play_song(&song);
+                                    self.state.changed = true;
+                                    self.state.mode = self.state.last_mode;
                                 }
-                            }
-                            KeyReturn::ExitMenu => {
-                                self.state.changed = true;
-                                self.state.mode = InputMode::Main;
-                            }
-                            KeyReturn::Navigate => {
-                                self.state.changed = true;
-                                if self.indexer.result_len() > 0 {
-                                    self.state.mode = InputMode::ResultScreen;
-                                    self.menu_component.handle_key(&mut self.indexer, key)?;
+                                KeyReturn::ExitMenu => {
+                                    self.state.changed = true;
+                                    self.state.mode = self.state.last_mode;
                                 }
+                                KeyReturn::Navigate => {
+                                    self.state.changed = true;
+                                    self.state.mode = InputMode::SearchInput;
+                                    self.search_component.handle_key(key)?;
+                                }
+                                _ => {}
                             }
-                            _ => {}
+                        } else if self.state.mode == InputMode::SearchInput {
+                            self.state.last_mode = InputMode::SearchInput;
+                            match self.search_component.handle_key(key)? {
+                                KeyReturn::Search(query) => {
+                                    self.search(&query)?;
+                                    if self.indexer.result_len() > 0 {
+                                        self.state.mode = InputMode::ResultScreen;
+                                        self.menu_component.start_pos = 0;
+                                        self.menu_component.selected = 0;
+                                    } else {
+                                        log!("Pushing error");
+                                        self.state.errors.push_back("No results from search".into());
+                                    }
+                                }
+                                KeyReturn::ExitMenu => {
+                                    self.state.changed = true;
+                                    self.state.mode = InputMode::Main;
+                                }
+                                KeyReturn::Navigate => {
+                                    self.state.changed = true;
+                                    if self.indexer.result_len() > 0 {
+                                        self.state.mode = InputMode::ResultScreen;
+                                        self.menu_component.handle_key(&mut self.indexer, key)?;
+                                    }
+                                }
+                                _ => {}
+                            }
                         }
                     }
                 }
             }
+            _ => {}
         }
         Ok(self.state.quit)
     }
