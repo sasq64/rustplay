@@ -1260,6 +1260,7 @@ dependencies = [
  "rhai",
  "ringbuf",
  "rubato",
+ "smartstring",
  "spectrum-analyzer",
  "tantivy",
  "walkdir",

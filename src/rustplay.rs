@@ -486,6 +486,7 @@ impl RustPlay {
         self.state.height = height as i32;
         self.state.changed = true;
         self.height = height as usize;
+        self.templ.draw(width as usize, height as usize);
 
         // Template will be redrawn on next render with new size
     }
