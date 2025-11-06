@@ -58,7 +58,6 @@ impl Template {
         self.data.iter()
     }
 
-
     pub fn get_pos(&self, id: &str) -> Option<(u16, u16)> {
         if let Some(ph) = self.data.get(id) {
             return Some((ph.col as u16, ph.line as u16));
@@ -66,10 +65,7 @@ impl Template {
         None
     }
 
-    fn render<T: Display, Q: Hash + Eq + Borrow<str>>(
-        &self,
-        data: &HashMap<Q, T>,
-    ) -> Vec<String> {
+    fn render<T: Display, Q: Hash + Eq + Borrow<str>>(&self, data: &HashMap<Q, T>) -> Vec<String> {
         let mut result = self.templ.clone();
         for (key, val) in data {
             if let Some(ph) = self.data.get(key.borrow()) {
@@ -124,10 +120,10 @@ impl Template {
                         if let Some(alias) = m.get(2) {
                             renames.insert(alias.as_str().to_string(), var.as_str().to_string());
                         }
-                        if let Some(color) = m.get(4) {
-                            if let Ok(rgb) = u32::from_str_radix(color.as_str(), 16) {
-                                colors.insert(var.as_str().to_string(), rgb);
-                            }
+                        if let Some(color) = m.get(4)
+                            && let Ok(rgb) = u32::from_str_radix(color.as_str(), 16)
+                        {
+                            colors.insert(var.as_str().to_string(), rgb);
                         }
                     }
                     return false;
@@ -183,10 +179,7 @@ impl Template {
                     }
                     if cap.name("fill").is_some() {
                         dup_indexes.push(i);
-                        target.replace_range(
-                            m.start()..m.end(),
-                            &spaces[0..(m.end() - m.start())],
-                        );
+                        target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
                     }
                 }
                 let count = target.chars().count();

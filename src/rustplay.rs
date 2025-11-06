@@ -28,8 +28,8 @@ use crossterm::{
 
 mod gui;
 mod indexer;
-mod song;
 mod scripting;
+mod song;
 
 use crate::term_extra::{MaybeCommand, SetReverse};
 
@@ -147,10 +147,10 @@ fn extract_zip(data_zip: &[u8], dd: &Path) -> Result<()> {
         if file.is_dir() {
             fs::create_dir_all(&outpath)?;
         } else {
-            if let Some(p) = outpath.parent() {
-                if !p.exists() {
-                    fs::create_dir_all(p)?;
-                }
+            if let Some(p) = outpath.parent()
+                && !p.exists()
+            {
+                fs::create_dir_all(p)?;
             }
             let mut outfile = fs::File::create(&outpath)?;
             io::copy(&mut file, &mut outfile)?;
@@ -182,7 +182,7 @@ pub struct RustPlay {
     fft_component: gui::Fft,
     current_list: Option<Box<dyn SongCollection>>,
     current_song: usize,
-    scripting: Scripting
+    scripting: Scripting,
 }
 impl RustPlay {
     /// Create a new instance of `RustPlay` using parsed command line arguments in `args`.
@@ -265,11 +265,7 @@ impl RustPlay {
             height: h.into(),
             no_term: args.no_term,
             indexer,
-            menu_component: gui::SongMenu {
-                height: h.into(),
-                use_color,
-                ..gui::SongMenu::default()
-            },
+            menu_component: gui::SongMenu::new(use_color),
             search_component: gui::SearchField::new(th),
             fft_component: gui::Fft {
                 data: Vec::new(),
@@ -280,7 +276,7 @@ impl RustPlay {
             },
             current_list,
             current_song: 0,
-            scripting
+            scripting,
         })
     }
     fn setup_term() -> io::Result<()> {
@@ -369,15 +365,14 @@ impl RustPlay {
 
     pub fn draw_screen(&mut self) -> Result<()> {
         let play_time = self.msec.load(Ordering::SeqCst);
-        if !self.state.player_started {
-            if let Some(cl) = &self.current_list {
-                if cl.len() > 0 {
-                    let song = cl.get(0);
-                    log!("Staring with song {:?}", &song.path);
-                    self.play_song(&song);
-                    self.state.player_started = true;
-                }
-            }
+        if !self.state.player_started
+            && let Some(cl) = &self.current_list
+            && cl.len() > 0
+        {
+            let song = cl.get(0);
+            log!("Staring with song {:?}", &song.path);
+            self.play_song(&song);
+            self.state.player_started = true;
         }
         // TODO: Separate update() function for things like this
         if self.state.len_msec > 0 && play_time > self.state.len_msec {
@@ -396,6 +391,7 @@ impl RustPlay {
         out.queue(normal_bg)?.queue(&black_bg)?.flush()?;
         if self.state.changed {
             self.state.changed = false;
+            self.menu_component.refresh();
             self.draw_info()?;
         }
 
@@ -413,12 +409,12 @@ impl RustPlay {
         }
         out.queue(&black_bg)?;
 
-        if self.indexer.working() {
-            if let Some((x, y)) = self.templ.get_pos("count") {
-                out.queue(cursor::MoveTo(x, y))?
-                    .queue(Print(format!("{}", self.indexer.index_count())))?
-                    .flush()?;
-            }
+        if self.indexer.working()
+            && let Some((x, y)) = self.templ.get_pos("count")
+        {
+            out.queue(cursor::MoveTo(x, y))?
+                .queue(Print(format!("{}", self.indexer.index_count())))?
+                .flush()?;
         }
 
         if self.fft_pos != VisualizerPos::None {
@@ -487,6 +483,7 @@ impl RustPlay {
         self.state.changed = true;
         self.height = height as usize;
         self.templ.draw(width as usize, height as usize);
+        self.menu_component.resize(width as usize, height as usize);
 
         // Template will be redrawn on next render with new size
     }
@@ -524,14 +521,19 @@ impl RustPlay {
                                 KeyCode::Char(d) if d.is_ascii_digit() => {
                                     self.set_song(d.to_digit(10).unwrap());
                                 }
-                                KeyCode::Char('i' | 's') => self.state.mode = InputMode::SearchInput,
+                                KeyCode::Char('i' | 's') => {
+                                    self.state.mode = InputMode::SearchInput
+                                }
                                 KeyCode::Char('n') => self.next(),
                                 KeyCode::Char(' ') => self.send_cmd(Player::play_pause),
                                 KeyCode::Char('p') => self.prev(),
                                 KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
                                 KeyCode::Right => self.send_cmd(Player::next_song),
                                 KeyCode::Left => self.send_cmd(Player::prev_song),
-                                KeyCode::PageUp | KeyCode::PageDown | KeyCode::Up | KeyCode::Down => {
+                                KeyCode::PageUp
+                                | KeyCode::PageDown
+                                | KeyCode::Up
+                                | KeyCode::Down => {
                                     if self.indexer.result_len() > 0 {
                                         self.state.mode = InputMode::ResultScreen;
                                         self.menu_component.handle_key(&mut self.indexer, key)?;
@@ -572,7 +574,9 @@ impl RustPlay {
                                         self.menu_component.selected = 0;
                                     } else {
                                         log!("Pushing error");
-                                        self.state.errors.push_back("No results from search".into());
+                                        self.state
+                                            .errors
+                                            .push_back("No results from search".into());
                                     }
                                 }
                                 KeyReturn::ExitMenu => {
@@ -598,10 +602,10 @@ impl RustPlay {
     }
 
     fn get_song(&self, n: usize) -> Option<FileInfo> {
-        if let Some(cl) = &self.current_list {
-            if n < cl.len() {
-                return Some(cl.get(n));
-            }
+        if let Some(cl) = &self.current_list
+            && n < cl.len()
+        {
+            return Some(cl.get(n));
         }
         None
     }
@@ -660,7 +664,6 @@ impl RustPlay {
         if let Some(Value::Number(len)) = self.state.meta.get("length") {
             self.state.len_msec = (len * 1000.0) as usize;
         }
-
     }
 
     /// Add a path to the indexer
@@ -685,10 +688,10 @@ impl RustPlay {
             .into());
         }
 
-        if let Some(t) = self.player_thread.take() {
-            if let Err(err) = t.join() {
-                panic::resume_unwind(err);
-            }
+        if let Some(t) = self.player_thread.take()
+            && let Err(err) = t.join()
+        {
+            panic::resume_unwind(err);
         }
         Ok(())
     }

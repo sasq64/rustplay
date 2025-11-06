@@ -129,11 +129,11 @@ impl Player {
 
     #[allow(clippy::unnecessary_wraps)]
     pub fn prev_song(&mut self) -> PlayResult {
-        if self.song > 0 {
-            if let Some(cp) = &self.chip_player {
-                cp.seek(self.song - 1, 0);
-                self.reset();
-            }
+        if self.song > 0
+            && let Some(cp) = &self.chip_player
+        {
+            cp.seek(self.song - 1, 0);
+            self.reset();
         }
         Ok(true)
     }
@@ -183,22 +183,22 @@ impl Player {
         if let Some(new_song) = self.new_song.take() {
             //println!("New song {}", new_song.to_str().unwrap());
             info_producer.push_value("new", 0)?;
-            if let Some(ext) = new_song.extension() {
-                if ext == "mp3" {
-                    if let Ok(duration) = mp3_duration::from_path(&new_song) {
-                        let secs = duration.as_secs() as i32;
-                        info_producer.push_value("length", secs)?;
+            if let Some(ext) = new_song.extension()
+                && ext == "mp3"
+            {
+                if let Ok(duration) = mp3_duration::from_path(&new_song) {
+                    let secs = duration.as_secs() as i32;
+                    info_producer.push_value("length", secs)?;
+                }
+                if let Ok(tag) = Tag::read_from_path(new_song) {
+                    if let Some(album) = tag.album() {
+                        info_producer.push_value("album", album)?;
                     }
-                    if let Ok(tag) = Tag::read_from_path(new_song) {
-                        if let Some(album) = tag.album() {
-                            info_producer.push_value("album", album)?;
-                        }
-                        if let Some(artist) = tag.artist() {
-                            info_producer.push_value("composer", artist)?;
-                        }
-                        if let Some(title) = tag.title() {
-                            info_producer.push_value("title", title)?;
-                        }
+                    if let Some(artist) = tag.artist() {
+                        info_producer.push_value("composer", artist)?;
+                    }
+                    if let Some(title) = tag.title() {
+                        info_producer.push_value("title", title)?;
                     }
                 }
             }
@@ -363,9 +363,8 @@ pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
     let info_producer_error = info_producer.clone();
 
     Ok(thread::spawn(move || {
-        let main = || -> Result<()> {
-            run_audio_loop(fft, info_producer, cmd_consumer, msec, backend)
-        };
+        let main =
+            || -> Result<()> { run_audio_loop(fft, info_producer, cmd_consumer, msec, backend) };
         if let Err(e) = main() {
             // Try to send error info back to main thread before terminating
             let _ = info_producer_error.send((
@@ -416,10 +415,9 @@ mod tests {
         let args = Args { ..Args::default() };
         let data = Path::new("data");
         musix::init(data).unwrap();
-        let backend = super::NoSoundBackend;
+        let backend = super::NoSoundBackend {};
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend)
-                .unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();
@@ -436,10 +434,9 @@ mod tests {
         let msec = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
         musix::init(Path::new("data")).unwrap();
-        let backend = super::NoSoundBackend;
+        let backend = super::NoSoundBackend {};
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend)
-                .unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();

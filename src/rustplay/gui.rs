@@ -25,9 +25,12 @@ pub enum KeyReturn {
 pub struct SongMenu {
     pub start_pos: usize,
     pub selected: usize,
+    pub width: usize,
     pub height: usize,
     pub fader: Vec<i32>,
     pub use_color: bool,
+    scrolled: bool,
+    moved: bool,
 }
 
 impl SongMenu {
@@ -41,15 +44,23 @@ impl SongMenu {
             self.fader.resize(self.height, 0);
         }
         let mut out = stdout();
-        out.queue(Clear(ClearType::All))?;
+        if self.scrolled {
+            out.queue(Clear(ClearType::All))?;
+        }
         out.queue(cursor::MoveTo(0, 0))?;
         let start = self.start_pos;
         let songs = indexer.get_songs(start, start + self.height)?;
         if self.use_color {
             self.fader[self.selected - self.start_pos] = 10;
             for (i, song) in songs.into_iter().enumerate() {
+                let name = song.full_song_name();
+                let name = if name.len() > (self.width - 1) {
+                    name.chars().take(self.width - 1).collect()
+                } else {
+                    name
+                };
                 out.queue(SetForegroundColor(self.fade(i)))?
-                    .queue(Print(song.full_song_name()))?
+                    .queue(Print(name))?
                     .queue(MoveToNextLine(1))?;
                 if self.fader[i] > 0 {
                     self.fader[i] -= 1;
@@ -69,7 +80,29 @@ impl SongMenu {
             }
         }
         out.flush()?;
+        self.scrolled = false;
+        self.moved = false;
         Ok(())
+    }
+
+    pub fn new(use_color: bool) -> Self {
+        SongMenu {
+            width: 80,
+            height: 25,
+            use_color,
+            scrolled: true,
+            ..SongMenu::default()
+        }
+    }
+
+    pub fn resize(&mut self, width: usize, height: usize) {
+        self.width = width;
+        self.height = height;
+        self.scrolled = true;
+    }
+
+    pub fn refresh(&mut self) {
+        self.scrolled = true;
     }
 
     #[allow(clippy::unnecessary_wraps)]
@@ -79,6 +112,7 @@ impl SongMenu {
         key: event::KeyEvent,
     ) -> Result<KeyReturn> {
         let song_len = indexer.result_len();
+        let old_selected = self.selected;
         match key.code {
             KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
             KeyCode::Char(_) => return Ok(KeyReturn::Navigate),
@@ -103,21 +137,28 @@ impl SongMenu {
             }
             _ => {}
         }
+        if self.selected == old_selected {
+            return Ok(KeyReturn::Nothing);
+        }
+        self.moved = true;
 
         if self.selected < self.start_pos {
-            self.start_pos = self.start_pos.saturating_sub(self.height)
+            self.start_pos = self.start_pos.saturating_sub(self.height);
+            self.scrolled = true;
         } else if self.selected >= self.start_pos + self.height {
             self.start_pos += self.height;
+            self.scrolled = true;
         }
-
         if song_len > 0 {
             if self.selected + 1 >= song_len {
                 self.selected = song_len - 1;
             }
             if song_len <= self.height {
                 self.start_pos = 0;
+                self.scrolled = true;
             } else if self.start_pos + self.height > song_len {
                 self.start_pos = song_len - self.height;
+                self.scrolled = true;
             }
         }
 

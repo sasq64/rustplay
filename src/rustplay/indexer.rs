@@ -93,8 +93,7 @@ impl Indexer {
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()?;
 
-        let modland_formats: HashSet<&str> =
-            include_str!("modland_formats.txt").lines().collect();
+        let modland_formats: HashSet<&str> = include_str!("modland_formats.txt").lines().collect();
 
         Ok(Self {
             schema,
@@ -205,18 +204,18 @@ impl Indexer {
     }
 
     pub fn identify_song(path: &Path) -> Result<Option<SongInfo>> {
-        if let Some(ext) = path.extension() {
-            if ext == "sid" {
-                let mut buf: [u8; 0x60] = [0; 0x60];
-                File::open(path)?.read_exact(&mut buf)?;
-                let title = slice_to_string(&buf[0x16..0x36]);
-                let composer = slice_to_string(&buf[0x36..0x56]);
-                return Ok(Some(SongInfo {
-                    title,
-                    composer,
-                    ..SongInfo::default()
-                }));
-            }
+        if let Some(ext) = path.extension()
+            && ext == "sid"
+        {
+            let mut buf: [u8; 0x60] = [0; 0x60];
+            File::open(path)?.read_exact(&mut buf)?;
+            let title = slice_to_string(&buf[0x16..0x36]);
+            let composer = slice_to_string(&buf[0x36..0x56]);
+            return Ok(Some(SongInfo {
+                title,
+                composer,
+                ..SongInfo::default()
+            }));
         }
         Ok(musix::identify_song(path))
     }
