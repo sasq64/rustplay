@@ -82,7 +82,11 @@ impl State {
                     "length" => {
                         self.meta.insert(
                             "len".to_owned(),
-                            Value::Text(format!("{:02}:{:02}", i / 60, i % 60).to_owned()),
+                            if i > 0 {
+                                Value::Text(format!("{:02}:{:02}", i / 60, i % 60).to_owned())
+                            } else {
+                                Value::Text("??:??".to_owned())
+                            },
                         );
                     }
                     "song" => {
@@ -265,7 +269,7 @@ impl RustPlay {
             height: h.into(),
             no_term: args.no_term,
             indexer,
-            menu_component: gui::SongMenu::new(use_color),
+            menu_component: gui::SongMenu::new(use_color, w.into(), h.into()),
             search_component: gui::SearchField::new(th),
             fft_component: gui::Fft {
                 data: Vec::new(),
@@ -484,8 +488,6 @@ impl RustPlay {
         self.height = height as usize;
         self.templ.draw(width as usize, height as usize);
         self.menu_component.resize(width as usize, height as usize);
-
-        // Template will be redrawn on next render with new size
     }
 
     pub fn handle_keys(&mut self) -> Result<bool> {

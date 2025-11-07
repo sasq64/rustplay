@@ -183,6 +183,10 @@ impl Player {
         if let Some(new_song) = self.new_song.take() {
             //println!("New song {}", new_song.to_str().unwrap());
             info_producer.push_value("new", 0)?;
+            info_producer.push_value("song", 0)?;
+            info_producer.push_value("songs", 1)?;
+            self.song = 0;
+            self.songs = 1;
             if let Some(ext) = new_song.extension()
                 && ext == "mp3"
             {

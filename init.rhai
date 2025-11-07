@@ -20,7 +20,7 @@ let vars = #{
   a: #{ alias: "isong"},
   b: #{ alias: "song"},
   fmt: #{ alias: "format"},
-  sub_title: #{ color: 0xff0000 },
+  sub_title: #{ color: 0xff8040 },
   title_and_composer: #{ func: title_and_composer},
   count: #{ color: 0x808080 },
 };

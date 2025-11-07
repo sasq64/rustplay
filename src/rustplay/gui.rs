@@ -85,10 +85,10 @@ impl SongMenu {
         Ok(())
     }
 
-    pub fn new(use_color: bool) -> Self {
+    pub fn new(use_color: bool, width: usize, height: usize) -> Self {
         SongMenu {
-            width: 80,
-            height: 25,
+            width,
+            height,
             use_color,
             scrolled: true,
             ..SongMenu::default()

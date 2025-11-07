@@ -28,7 +28,8 @@ use crate::value::Value;
 use super::song::{FileInfo, SongArray, SongCollection};
 
 #[inline]
-/// Convert 8 bit unicode to utf8 String
+/// Convert ISO-8859-1 slice to utf8 String
+/// (For text in SID header)
 fn slice_to_string(slice: &[u8]) -> String {
     slice
         .iter()
@@ -37,10 +38,9 @@ fn slice_to_string(slice: &[u8]) -> String {
         .collect()
 }
 
-pub trait PlayList {
-    fn next() -> Option<FileInfo>;
-}
+const INITIAL_SONG_COUNT: usize = 100;
 
+/// An Tantivity indexer that indexes song files.
 pub struct Indexer {
     schema: Schema,
     index: Index,
@@ -52,7 +52,7 @@ pub struct Indexer {
     composer_field: Field,
     path_field: Field,
 
-    song_list: VecDeque<FileInfo>,
+    initial_songs: VecDeque<FileInfo>,
     count: AtomicUsize,
     modland_formats: HashSet<&'static str>,
 }
@@ -104,7 +104,7 @@ impl Indexer {
             title_field,
             composer_field,
             path_field,
-            song_list: VecDeque::new(),
+            initial_songs: VecDeque::new(),
             count: 0.into(),
             modland_formats,
         })
@@ -131,7 +131,7 @@ impl Indexer {
                 self.composer_field => info.composer.clone(),
                 self.path_field => song_path.to_str().context("Illegal path")?
                                     .to_owned()))?;
-        if self.song_list.len() < 100 {
+        if self.initial_songs.len() < INITIAL_SONG_COUNT {
             let file_info = FileInfo {
                 path: song_path.into(),
                 meta_data: HashMap::from([
@@ -139,7 +139,7 @@ impl Indexer {
                     ("composer".into(), Value::Text(info.composer.clone())),
                 ]),
             };
-            self.song_list.push_back(file_info);
+            self.initial_songs.push_back(file_info);
         }
         Ok(())
     }
@@ -155,12 +155,12 @@ impl Indexer {
         self.index_writer.add_document(doc!(
                 self.title_field =>  title.to_string(),
                 self.path_field => song_path.to_string_lossy().to_string()))?;
-        if self.song_list.len() < 100 {
+        if self.initial_songs.len() < INITIAL_SONG_COUNT {
             let file_info = FileInfo {
                 path: song_path.into(),
                 meta_data: HashMap::new(),
             };
-            self.song_list.push_back(file_info);
+            self.initial_songs.push_back(file_info);
         }
         Ok(())
     }
@@ -220,13 +220,6 @@ impl Indexer {
         Ok(musix::identify_song(path))
     }
 
-    pub fn next(&mut self) -> Option<FileInfo> {
-        if self.song_list.is_empty() {
-            return None;
-        }
-        self.song_list.pop_front()
-    }
-
     pub fn commit(&mut self) -> Result<()> {
         self.index_writer.commit()?;
         self.reader.reload()?;
@@ -272,11 +265,11 @@ pub struct IndexedSongs {
 impl SongCollection for IndexedSongs {
     fn get(&self, index: usize) -> FileInfo {
         let i = self.indexer.lock().unwrap();
-        i.song_list[index].clone()
+        i.initial_songs[index].clone()
     }
     fn index_of(&self, song: &FileInfo) -> Option<usize> {
         let i = self.indexer.lock().unwrap();
-        for (i, s) in i.song_list.iter().enumerate() {
+        for (i, s) in i.initial_songs.iter().enumerate() {
             if song.path() == s.path() {
                 return Some(i);
             }
@@ -286,7 +279,7 @@ impl SongCollection for IndexedSongs {
 
     fn len(&self) -> usize {
         let i = self.indexer.lock().unwrap();
-        i.song_list.len()
+        i.initial_songs.len()
     }
 }
 
@@ -402,10 +395,6 @@ impl RemoteIndexer {
         Ok(())
     }
 
-    pub fn next(&self) -> Option<FileInfo> {
-        return self.lock().next();
-    }
-
     pub fn search(&mut self, query: &str) -> Result<()> {
         let mut indexer = self.lock();
         indexer.search(query)?;
@@ -440,7 +429,6 @@ impl RemoteIndexer {
         indexer.result.len()
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     pub fn get_song_result(&self) -> Option<Box<dyn SongCollection>> {
         let result = self.lock().result.clone();
         Some(Box::new(SongArray { songs: result }))
