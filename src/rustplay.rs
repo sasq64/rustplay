@@ -8,12 +8,13 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::io::{self, Cursor, Write as _, stdout};
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
-use std::time::Duration;
-use std::{fs, panic, thread};
+use std::{fs, panic};
 use std::{path::Path, thread::JoinHandle};
 
+use crate::media_keys::MediaKeyEvent;
 use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
 use crate::value::Value;
@@ -188,6 +189,8 @@ pub struct RustPlay {
     current_list: Option<Box<dyn SongCollection>>,
     current_song: usize,
     scripting: Scripting,
+    media_keys_receiver: mpsc::Receiver<media_keys::MediaKeyEvent>,
+    media_keys_shutdown: Arc<AtomicBool>,
 }
 impl RustPlay {
     /// Create a new instance of `RustPlay` using parsed command line arguments in `args`.
@@ -202,7 +205,7 @@ impl RustPlay {
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
 
-        let _media_keys = media_keys::start();
+        let (media_keys_shutdown, media_keys_receiver) = media_keys::start();
 
         if !args.no_term {
             Self::setup_term()?;
@@ -284,6 +287,8 @@ impl RustPlay {
             current_list,
             current_song: 0,
             scripting,
+            media_keys_receiver,
+            media_keys_shutdown,
         })
     }
     fn setup_term() -> io::Result<()> {
@@ -669,6 +674,13 @@ impl RustPlay {
         if let Some(Value::Number(len)) = self.state.meta.get("length") {
             self.state.len_msec = (len * 1000.0) as usize;
         }
+        if let Ok(cmd) = self.media_keys_receiver.try_recv() {
+            match cmd {
+                MediaKeyEvent::Next => self.next(),
+                MediaKeyEvent::Previous => self.prev(),
+                _ => (),
+            }
+        }
     }
 
     /// Add a path to the indexer
@@ -692,6 +704,9 @@ impl RustPlay {
             }
             .into());
         }
+
+        // Shutdown media keys listener
+        self.media_keys_shutdown.store(true, Ordering::Relaxed);
 
         if let Some(t) = self.player_thread.take()
             && let Err(err) = t.join()

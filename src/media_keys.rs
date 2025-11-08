@@ -1,10 +1,22 @@
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 use zbus::Connection;
 use zbus::interface;
+
+/// Media key events that can be listened to
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MediaKeyEvent {
+    Next,
+    Previous,
+    PlayPause,
+    Play,
+    Pause,
+    Stop,
+}
 
 #[derive(Clone, Copy, Default)]
 pub struct CallCounts {
@@ -17,11 +29,12 @@ pub struct CallCounts {
 /// Main MPRIS interface implementation
 pub struct MainInterface {
     call_counts: Arc<Mutex<CallCounts>>,
+    event_sender: mpsc::Sender<MediaKeyEvent>,
 }
 
 impl MainInterface {
-    fn new(call_counts: Arc<Mutex<CallCounts>>) -> Self {
-        MainInterface { call_counts }
+    fn new(call_counts: Arc<Mutex<CallCounts>>, event_sender: mpsc::Sender<MediaKeyEvent>) -> Self {
+        MainInterface { call_counts, event_sender }
     }
 }
 
@@ -59,11 +72,12 @@ impl MainInterface {
 /// MPRIS Media Player interface implementation
 pub struct MediaPlayer {
     call_counts: Arc<Mutex<CallCounts>>,
+    event_sender: mpsc::Sender<MediaKeyEvent>,
 }
 
 impl MediaPlayer {
-    fn new(call_counts: Arc<Mutex<CallCounts>>) -> Self {
-        MediaPlayer { call_counts }
+    fn new(call_counts: Arc<Mutex<CallCounts>>, event_sender: mpsc::Sender<MediaKeyEvent>) -> Self {
+        MediaPlayer { call_counts, event_sender }
     }
 }
 
@@ -155,6 +169,7 @@ impl MediaPlayer {
         if let Ok(mut counts) = self.call_counts.lock() {
             counts.next_count += 1;
         }
+        let _ = self.event_sender.send(MediaKeyEvent::Next);
         Ok(())
     }
 
@@ -163,6 +178,7 @@ impl MediaPlayer {
         if let Ok(mut counts) = self.call_counts.lock() {
             counts.previous_count += 1;
         }
+        let _ = self.event_sender.send(MediaKeyEvent::Previous);
         Ok(())
     }
 
@@ -172,6 +188,7 @@ impl MediaPlayer {
             counts.play_pause_count += 1;
             counts.is_playing = !counts.is_playing;
         }
+        let _ = self.event_sender.send(MediaKeyEvent::PlayPause);
         Ok(())
     }
 
@@ -180,6 +197,7 @@ impl MediaPlayer {
         if let Ok(mut counts) = self.call_counts.lock() {
             counts.is_playing = true;
         }
+        let _ = self.event_sender.send(MediaKeyEvent::Play);
         Ok(())
     }
 
@@ -188,19 +206,22 @@ impl MediaPlayer {
         if let Ok(mut counts) = self.call_counts.lock() {
             counts.is_playing = false;
         }
+        let _ = self.event_sender.send(MediaKeyEvent::Pause);
         Ok(())
     }
 
     fn stop(&self) -> zbus::fdo::Result<()> {
+        let _ = self.event_sender.send(MediaKeyEvent::Stop);
         Ok(())
     }
 }
 
 /// Start the MPRIS listener in a background thread
-/// Returns (shutdown_flag, call_counts, service_name)
-pub fn start_with_name(service_name: &str) -> (Arc<AtomicBool>, Arc<Mutex<CallCounts>>, String) {
+/// Returns (shutdown_flag, event_receiver, service_name)
+pub fn start_with_name(service_name: &str) -> (Arc<AtomicBool>, mpsc::Receiver<MediaKeyEvent>, String) {
     let shutdown = Arc::new(AtomicBool::new(false));
     let call_counts = Arc::new(Mutex::new(CallCounts::default()));
+    let (event_sender, event_receiver) = mpsc::channel();
     let shutdown_clone = shutdown.clone();
     let counts_clone = call_counts.clone();
     let service_name_owned = service_name.to_string();
@@ -209,7 +230,7 @@ pub fn start_with_name(service_name: &str) -> (Arc<AtomicBool>, Arc<Mutex<CallCo
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         rt.block_on(async {
-            match setup_mpris(shutdown_clone, counts_clone, &service_name_for_thread).await {
+            match setup_mpris(shutdown_clone, counts_clone, &service_name_for_thread, event_sender).await {
                 Ok(_) => {
                     println!("[MPRIS] Listener started successfully");
                 }
@@ -220,20 +241,21 @@ pub fn start_with_name(service_name: &str) -> (Arc<AtomicBool>, Arc<Mutex<CallCo
         });
     });
 
-    (shutdown, call_counts, service_name_owned)
+    (shutdown, event_receiver, service_name_owned)
 }
 
 /// Start the MPRIS listener in a background thread with default service name
-/// Returns (shutdown_flag, call_counts)
-pub fn start() -> (Arc<AtomicBool>, Arc<Mutex<CallCounts>>) {
-    let (shutdown, call_counts, _) = start_with_name("org.mpris.MediaPlayer2.oldplay");
-    (shutdown, call_counts)
+/// Returns (shutdown_flag, event_receiver)
+pub fn start() -> (Arc<AtomicBool>, mpsc::Receiver<MediaKeyEvent>) {
+    let (shutdown, event_receiver, _) = start_with_name("org.mpris.MediaPlayer2.oldplay");
+    (shutdown, event_receiver)
 }
 
 async fn setup_mpris(
     shutdown: Arc<AtomicBool>,
     call_counts: Arc<Mutex<CallCounts>>,
     service_name: &str,
+    event_sender: mpsc::Sender<MediaKeyEvent>,
 ) -> Result<(), zbus::Error> {
     let connection = Connection::session().await?;
 
@@ -241,8 +263,8 @@ async fn setup_mpris(
     connection.request_name(service_name).await?;
 
     // Register both the main interface and the player interface at the standard MPRIS path
-    let main = MainInterface::new(call_counts.clone());
-    let player = MediaPlayer::new(call_counts);
+    let main = MainInterface::new(call_counts.clone(), event_sender.clone());
+    let player = MediaPlayer::new(call_counts, event_sender);
 
     connection
         .object_server()
@@ -288,7 +310,7 @@ mod tests {
     fn test_mpris_next() {
         // Start the listener with a unique name for this test
         let service_name = "org.mpris.MediaPlayer2.oldplay.next_test";
-        let (shutdown, call_counts, _) = start_with_name(service_name);
+        let (shutdown, event_receiver, _) = start_with_name(service_name);
 
         // Wait for D-Bus registration with verification
         let mut attempts = 0;
@@ -326,29 +348,26 @@ mod tests {
             stdout
         );
 
-        // Wait for the counter to be incremented with a timeout
+        // Wait for the event to be received with a timeout
         let mut attempts = 0;
         let max_attempts = 30;
-        loop {
-            let counts = call_counts.lock().expect("Failed to lock call counts");
-            if counts.next_count >= 1 {
-                break;
+        let event_received = loop {
+            if let Ok(event) = event_receiver.try_recv() {
+                break Some(event);
             }
-            drop(counts);
 
             if attempts >= max_attempts {
-                panic!("Timeout waiting for Next call to be recorded");
+                break None;
             }
             thread::sleep(Duration::from_millis(50));
             attempts += 1;
-        }
+        };
 
-        // Verify the counter was incremented
-        let counts = call_counts.lock().expect("Failed to lock call counts");
+        // Verify the event was received
         assert_eq!(
-            counts.next_count, 1,
-            "Expected 1 Next call, got {}",
-            counts.next_count
+            event_received,
+            Some(MediaKeyEvent::Next),
+            "Expected MediaKeyEvent::Next"
         );
 
         // Cleanup
@@ -359,7 +378,7 @@ mod tests {
     #[test]
     fn test_mpris_previous() {
         let service_name = "org.mpris.MediaPlayer2.oldplay.previous_test";
-        let (shutdown, call_counts, _) = start_with_name(service_name);
+        let (shutdown, event_receiver, _) = start_with_name(service_name);
 
         let mut attempts = 0;
         while !verify_service_registered(service_name) && attempts < 20 {
@@ -395,28 +414,26 @@ mod tests {
             stdout
         );
 
-        // Wait for the counter to be incremented with a timeout
+        // Wait for the event to be received with a timeout
         let mut attempts = 0;
         let max_attempts = 30;
-        loop {
-            let counts = call_counts.lock().expect("Failed to lock call counts");
-            if counts.previous_count >= 1 {
-                break;
+        let event_received = loop {
+            if let Ok(event) = event_receiver.try_recv() {
+                break Some(event);
             }
-            drop(counts);
 
             if attempts >= max_attempts {
-                panic!("Timeout waiting for Previous call to be recorded");
+                break None;
             }
             thread::sleep(Duration::from_millis(50));
             attempts += 1;
-        }
+        };
 
-        let counts = call_counts.lock().expect("Failed to lock call counts");
+        // Verify the event was received
         assert_eq!(
-            counts.previous_count, 1,
-            "Expected 1 Previous call, got {}",
-            counts.previous_count
+            event_received,
+            Some(MediaKeyEvent::Previous),
+            "Expected MediaKeyEvent::Previous"
         );
 
         shutdown.store(true, Ordering::Relaxed);
@@ -426,7 +443,7 @@ mod tests {
     #[test]
     fn test_mpris_play_pause() {
         let service_name = "org.mpris.MediaPlayer2.oldplay.playpause_test";
-        let (shutdown, call_counts, _) = start_with_name(service_name);
+        let (shutdown, event_receiver, _) = start_with_name(service_name);
 
         let mut attempts = 0;
         while !verify_service_registered(service_name) && attempts < 20 {
@@ -462,28 +479,26 @@ mod tests {
             stdout
         );
 
-        // Wait for the counter to be incremented with a timeout
+        // Wait for the event to be received with a timeout
         let mut attempts = 0;
         let max_attempts = 30;
-        loop {
-            let counts = call_counts.lock().expect("Failed to lock call counts");
-            if counts.play_pause_count >= 1 {
-                break;
+        let event_received = loop {
+            if let Ok(event) = event_receiver.try_recv() {
+                break Some(event);
             }
-            drop(counts);
 
             if attempts >= max_attempts {
-                panic!("Timeout waiting for PlayPause call to be recorded");
+                break None;
             }
             thread::sleep(Duration::from_millis(50));
             attempts += 1;
-        }
+        };
 
-        let counts = call_counts.lock().expect("Failed to lock call counts");
+        // Verify the event was received
         assert_eq!(
-            counts.play_pause_count, 1,
-            "Expected 1 PlayPause call, got {}",
-            counts.play_pause_count
+            event_received,
+            Some(MediaKeyEvent::PlayPause),
+            "Expected MediaKeyEvent::PlayPause"
         );
 
         shutdown.store(true, Ordering::Relaxed);
