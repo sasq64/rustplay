@@ -261,10 +261,10 @@ pub fn start_with_name(
             .await
             {
                 Ok(_) => {
-                    println!("[MPRIS] Listener started successfully");
+                    log!("[MPRIS] Listener started successfully");
                 }
                 Err(e) => {
-                    eprintln!("[MPRIS] Error starting listener: {}", e);
+                    log!("[MPRIS] Error starting listener: {}", e);
                 }
             }
         });
@@ -305,42 +305,27 @@ async fn setup_mpris(
         .at("/org/mpris/MediaPlayer2", player)
         .await?;
 
-    println!("[MPRIS] Registered as {}", service_name);
+    log!("[MPRIS] Registered as {}", service_name);
 
     // Keep the connection alive until shutdown is signaled
     loop {
-        match event_receiver.try_recv() {
-            Ok(MediaKeyInfo::Shutdown) => break,
-            Ok(MediaKeyInfo::Playing) => {
-                log!("PLAY");
-                if let Ok(mut ps) = play_state.lock() {
-                    ps.is_playing = true
-                }
+        if let Ok(x) = event_receiver.try_recv()
+            && let Ok(mut ps) = play_state.lock()
+        {
+            match x {
+                MediaKeyInfo::Shutdown => break,
+                MediaKeyInfo::Playing => ps.is_playing = true,
+                MediaKeyInfo::Paused => ps.is_playing = false,
+                MediaKeyInfo::Title(title) => ps.title = title,
+                MediaKeyInfo::Author(author) => ps.author = author,
             }
-            Ok(MediaKeyInfo::Paused) => {
-                log!("PAUSE");
-                if let Ok(mut ps) = play_state.lock() {
-                    ps.is_playing = false
-                }
-            }
-            Ok(MediaKeyInfo::Title(title)) => {
-                if let Ok(mut ps) = play_state.lock() {
-                    ps.title = title
-                }
-            }
-            Ok(MediaKeyInfo::Author(author)) => {
-                if let Ok(mut ps) = play_state.lock() {
-                    ps.author = author
-                }
-            }
-            Err(_) => {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
+        } else {
+            tokio::time::sleep(Duration::from_millis(100)).await;
         }
     }
 
     connection.release_name(service_name).await?;
-    println!("[MPRIS] Listener stopped");
+    log!("[MPRIS] Listener stopped");
 
     Ok(())
 }
