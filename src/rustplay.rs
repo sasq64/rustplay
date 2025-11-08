@@ -14,7 +14,7 @@ use std::{fs, panic};
 use std::{path::Path, thread::JoinHandle};
 
 use crate::media_keys::MediaKeyEvent;
-use crate::player::{Cmd, Info, PlayResult, Player};
+use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
 use crate::templ::Template;
 use crate::value::Value;
 use crate::{Args, log};
@@ -107,7 +107,7 @@ impl State {
             Value::Error(ref e) => {
                 self.errors.push_back((*e).to_string());
             }
-            Value::Data(_) | Value::Unknown => {}
+            Value::State(_) | Value::Data(_) | Value::Unknown => {}
         }
 
         self.meta.insert(meta.to_owned(), val);
@@ -499,7 +499,6 @@ impl RustPlay {
 
     pub fn play_pause(&mut self) {
         self.send_cmd(Player::play_pause);
-        self.media_sender.send(MediaKeyEvent::Playing);
     }
 
     pub fn handle_keys(&mut self) -> Result<bool> {
@@ -663,7 +662,7 @@ impl RustPlay {
     }
 
     /// Update rustplay, read any meta data from player etc
-    pub fn update(&mut self) {
+    pub fn update(&mut self) -> Result<()> {
         if self.state.done {
             self.next();
             self.state.done = false;
@@ -671,6 +670,17 @@ impl RustPlay {
         while let Ok((meta, val)) = self.info_consumer.try_recv() {
             if meta != "fft" {
                 log!("SONG-META {} = {}", meta, val);
+            }
+            if meta == "state"
+                && let Value::State(n) = val
+            {
+                log!("state: {:?}", n);
+                match n {
+                    PlayState::Stopped => self.media_sender.send(MediaKeyEvent::Paused)?,
+                    PlayState::Paused => self.media_sender.send(MediaKeyEvent::Paused)?,
+                    PlayState::Playing => self.media_sender.send(MediaKeyEvent::Playing)?,
+                    _ => (),
+                }
             }
             self.state.update_meta(&meta, val);
         }
@@ -688,6 +698,7 @@ impl RustPlay {
                 _ => (),
             }
         }
+        Ok(())
     }
 
     /// Add a path to the indexer

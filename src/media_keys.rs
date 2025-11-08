@@ -6,6 +6,8 @@ use std::time::Duration;
 use zbus::Connection;
 use zbus::interface;
 
+use crate::log;
+
 /// Media key events that can be listened to
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MediaKeyEvent {
@@ -90,7 +92,7 @@ impl MediaPlayer {
             if ps.is_playing {
                 "Playing".to_string()
             } else {
-                "Stopped".to_string()
+                "Paused".to_string()
             }
         } else {
             "Stopped".to_string()
@@ -140,6 +142,7 @@ impl MediaPlayer {
     #[zbus(property)]
     fn can_play(&self) -> bool {
         if let Ok(play_state) = self.play_state.lock() {
+            log!("can_play {}", !play_state.is_playing);
             !play_state.is_playing
         } else {
             true
@@ -149,6 +152,7 @@ impl MediaPlayer {
     #[zbus(property)]
     fn can_pause(&self) -> bool {
         if let Ok(play_state) = self.play_state.lock() {
+            log!("can_pause {}", play_state.is_playing);
             play_state.is_playing
         } else {
             true
@@ -166,31 +170,31 @@ impl MediaPlayer {
     }
 
     fn next(&self) -> zbus::fdo::Result<()> {
-        println!("[MPRIS] Next pressed");
+        log!("[MPRIS] Next pressed");
         let _ = self.event_sender.send(MediaKeyEvent::Next);
         Ok(())
     }
 
     fn previous(&self) -> zbus::fdo::Result<()> {
-        println!("[MPRIS] Previous pressed");
+        log!("[MPRIS] Previous pressed");
         let _ = self.event_sender.send(MediaKeyEvent::Previous);
         Ok(())
     }
 
     fn play_pause(&self) -> zbus::fdo::Result<()> {
-        println!("[MPRIS] PlayPause pressed");
+        log!("[MPRIS] PlayPause pressed");
         let _ = self.event_sender.send(MediaKeyEvent::PlayPause);
         Ok(())
     }
 
     fn play(&self) -> zbus::fdo::Result<()> {
-        println!("[MPRIS] Play pressed");
+        log!("[MPRIS] Play pressed");
         let _ = self.event_sender.send(MediaKeyEvent::Play);
         Ok(())
     }
 
     fn pause(&self) -> zbus::fdo::Result<()> {
-        println!("[MPRIS] Pause pressed");
+        log!("[MPRIS] Pause pressed");
         let _ = self.event_sender.send(MediaKeyEvent::Pause);
         Ok(())
     }
@@ -280,11 +284,13 @@ async fn setup_mpris(
         match event_receiver.try_recv() {
             Ok(MediaKeyEvent::Shutdown) => break,
             Ok(MediaKeyEvent::Playing) => {
+                log!("PLAY");
                 if let Ok(mut ps) = play_state.lock() {
                     ps.is_playing = true
                 }
             }
             Ok(MediaKeyEvent::Paused) => {
+                log!("PAUSE");
                 if let Ok(mut ps) = play_state.lock() {
                     ps.is_playing = false
                 }

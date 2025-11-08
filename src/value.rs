@@ -3,12 +3,15 @@ use std::fmt::Display;
 
 use musix::MusicError;
 
+use crate::player::PlayState;
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) enum Value {
     Text(String),
     Number(f64),
     Data(Vec<u8>),
     Error(MusicError),
+    State(PlayState),
     #[default]
     Unknown,
 }
@@ -21,8 +24,15 @@ impl Display for Value {
             Value::Error(e) => write!(f, "{e}")?,
             Value::Data(_) => write!(f, "Data")?,
             Value::Unknown => write!(f, "???")?,
+            Value::State(ps) => write!(f, "{ps:?}")?,
         }
         Ok(())
+    }
+}
+
+impl From<PlayState> for Value {
+    fn from(item: PlayState) -> Self {
+        Value::State(item)
     }
 }
 

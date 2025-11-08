@@ -23,7 +23,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         if do_quit {
             break;
         }
-        rust_play.update();
+        rust_play.update()?;
         rust_play.draw_screen()?;
         std::thread::sleep(Duration::from_millis(5));
     }

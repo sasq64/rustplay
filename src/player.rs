@@ -90,13 +90,25 @@ fn parse_mp3<R: Read>(reader: &mut R) -> io::Result<bool> {
 }
 
 #[derive(Default, Debug, PartialEq, Clone, Copy)]
-enum PlayState {
+pub(crate) enum PlayState {
     #[default]
     Stopped,
     Playing,
     Paused,
     Quitting,
 }
+
+// impl From<i32> for PlayState {
+//     fn from(n: i32) -> Self {
+//         match n {
+//             0 => PlayState::Stopped,
+//             1 => PlayState::Playing,
+//             2 => PlayState::Paused,
+//             3 => PlayState::Quitting,
+//             _ => PlayState::Stopped,
+//         }
+//     }
+// }
 
 // #[allow(clippy::struct_field_names)]
 #[derive(Default, Debug)]
@@ -284,12 +296,19 @@ fn run_audio_loop<B: AudioBackend>(
         ..Player::default()
     };
 
+    let mut last_state = player.play_state;
+
     while player.play_state != PlayState::Quitting {
         // Process commands
         while let Ok(cmd_fn) = cmd_consumer.try_recv() {
             if let Err(e) = cmd_fn(&mut player) {
                 info_producer.push_value("error", e)?;
             }
+        }
+
+        if player.play_state != last_state {
+            last_state = player.play_state;
+            info_producer.push_value("state", last_state)?;
         }
 
         player.update_meta(&mut info_producer)?;
