@@ -13,7 +13,7 @@ use std::sync::{Arc, mpsc};
 use std::{fs, panic};
 use std::{path::Path, thread::JoinHandle};
 
-use crate::media_keys::MediaKeyEvent;
+use crate::media_keys::{MediaKeyEvent, MediaKeyInfo};
 use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
 use crate::templ::Template;
 use crate::value::Value;
@@ -189,7 +189,7 @@ pub struct RustPlay {
     current_song: usize,
     scripting: Scripting,
     media_keys_receiver: mpsc::Receiver<media_keys::MediaKeyEvent>,
-    media_sender: mpsc::Sender<MediaKeyEvent>,
+    media_sender: mpsc::Sender<MediaKeyInfo>,
 }
 impl RustPlay {
     /// Create a new instance of `RustPlay` using parsed command line arguments in `args`.
@@ -627,6 +627,13 @@ impl RustPlay {
         self.state.clear_meta();
         for (name, val) in &song.meta_data {
             log!("INDEX-META {name} = {val}");
+            if name == "composer"
+                && let Value::Text(composer) = val
+            {
+                let _ = self
+                    .media_sender
+                    .send(MediaKeyInfo::Author(composer.to_string()));
+            }
             self.state.update_meta(name, val.clone());
         }
         if let Some(fname) = song.path().file_stem() {
@@ -676,11 +683,25 @@ impl RustPlay {
             {
                 log!("state: {:?}", n);
                 match n {
-                    PlayState::Stopped => self.media_sender.send(MediaKeyEvent::Paused)?,
-                    PlayState::Paused => self.media_sender.send(MediaKeyEvent::Paused)?,
-                    PlayState::Playing => self.media_sender.send(MediaKeyEvent::Playing)?,
+                    PlayState::Stopped => self.media_sender.send(MediaKeyInfo::Paused)?,
+                    PlayState::Paused => self.media_sender.send(MediaKeyInfo::Paused)?,
+                    PlayState::Playing => self.media_sender.send(MediaKeyInfo::Playing)?,
                     _ => (),
                 }
+            }
+            if meta == "title"
+                && let Value::Text(title) = &val
+            {
+                self.media_sender
+                    .send(MediaKeyInfo::Title(title.to_string()))?
+            }
+            if meta == "composer"
+                && let Value::Text(composer) = &val
+                && !composer.is_empty()
+            {
+                log!("composer: {composer}");
+                self.media_sender
+                    .send(MediaKeyInfo::Author(composer.to_string()))?
             }
             self.state.update_meta(&meta, val);
         }
@@ -724,7 +745,7 @@ impl RustPlay {
         }
 
         // Shutdown media keys listener
-        let _ = self.media_sender.send(MediaKeyEvent::Shutdown);
+        let _ = self.media_sender.send(MediaKeyInfo::Shutdown);
 
         if let Some(t) = self.player_thread.take()
             && let Err(err) = t.join()

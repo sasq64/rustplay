@@ -17,14 +17,22 @@ pub enum MediaKeyEvent {
     Play,
     Pause,
     Stop,
-    Shutdown,
-    Playing,
-    Paused,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MediaKeyInfo {
+    Author(String),
+    Title(String),
+    Playing,
+    Paused,
+    Shutdown,
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct PlayState {
     is_playing: bool,
+    title: String,
+    author: String,
 }
 
 /// Main MPRIS interface implementation
@@ -106,7 +114,27 @@ impl MediaPlayer {
 
     #[zbus(property)]
     fn metadata(&self) -> std::collections::HashMap<String, zbus::zvariant::Value> {
-        std::collections::HashMap::new()
+        use zbus::zvariant::ObjectPath;
+        let mut metadata = std::collections::HashMap::new();
+        if let Ok(track_id) = ObjectPath::try_from("/org/mpris/MediaPlayer2/Track/1") {
+            metadata.insert(
+                "mpris:trackid".to_string(),
+                zbus::zvariant::Value::new(track_id),
+            );
+        }
+        if let Ok(ps) = self.play_state.lock() {
+            metadata.insert(
+                "xesam:title".to_string(),
+                zbus::zvariant::Value::new(ps.title.to_string()),
+            );
+            metadata.insert(
+                "xesam:artist".to_string(),
+                zbus::zvariant::Value::Array(zbus::zvariant::Array::from(vec![
+                    ps.author.to_string(),
+                ])),
+            );
+        }
+        metadata
     }
 
     #[zbus(property)]
@@ -210,7 +238,7 @@ impl MediaPlayer {
 pub fn start_with_name(
     service_name: &str,
 ) -> (
-    mpsc::Sender<MediaKeyEvent>,
+    mpsc::Sender<MediaKeyInfo>,
     mpsc::Receiver<MediaKeyEvent>,
     String,
 ) {
@@ -247,13 +275,13 @@ pub fn start_with_name(
 
 /// Start the MPRIS listener in a background thread with default service name
 /// Returns (shutdown_sender, event_receiver)
-pub fn start() -> (mpsc::Sender<MediaKeyEvent>, mpsc::Receiver<MediaKeyEvent>) {
+pub fn start() -> (mpsc::Sender<MediaKeyInfo>, mpsc::Receiver<MediaKeyEvent>) {
     let (shutdown_sender, event_receiver, _) = start_with_name("org.mpris.MediaPlayer2.oldplay");
     (shutdown_sender, event_receiver)
 }
 
 async fn setup_mpris(
-    event_receiver: mpsc::Receiver<MediaKeyEvent>,
+    event_receiver: mpsc::Receiver<MediaKeyInfo>,
     play_state: Arc<Mutex<PlayState>>,
     service_name: &str,
     event_sender: mpsc::Sender<MediaKeyEvent>,
@@ -282,20 +310,29 @@ async fn setup_mpris(
     // Keep the connection alive until shutdown is signaled
     loop {
         match event_receiver.try_recv() {
-            Ok(MediaKeyEvent::Shutdown) => break,
-            Ok(MediaKeyEvent::Playing) => {
+            Ok(MediaKeyInfo::Shutdown) => break,
+            Ok(MediaKeyInfo::Playing) => {
                 log!("PLAY");
                 if let Ok(mut ps) = play_state.lock() {
                     ps.is_playing = true
                 }
             }
-            Ok(MediaKeyEvent::Paused) => {
+            Ok(MediaKeyInfo::Paused) => {
                 log!("PAUSE");
                 if let Ok(mut ps) = play_state.lock() {
                     ps.is_playing = false
                 }
             }
-            Ok(_) => {} // Ignore other events on this receiver
+            Ok(MediaKeyInfo::Title(title)) => {
+                if let Ok(mut ps) = play_state.lock() {
+                    ps.title = title
+                }
+            }
+            Ok(MediaKeyInfo::Author(author)) => {
+                if let Ok(mut ps) = play_state.lock() {
+                    ps.author = author
+                }
+            }
             Err(_) => {
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
