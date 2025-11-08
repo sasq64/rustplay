@@ -30,3 +30,8 @@ anyhow = "1.0"
 dirs = "6.0"
 zip = "2.6.1"
 smartstring = "1.0.1"
+zbus = "4"
+tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+gag = "0.1"

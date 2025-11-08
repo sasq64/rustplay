@@ -10,14 +10,15 @@ use std::io::{self, Cursor, Write as _, stdout};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
-use std::{fs, panic};
+use std::time::Duration;
+use std::{fs, panic, thread};
 use std::{path::Path, thread::JoinHandle};
 
-use crate::VisualizerPos;
 use crate::player::{Cmd, Info, PlayResult, Player};
 use crate::templ::Template;
 use crate::value::Value;
 use crate::{Args, log};
+use crate::{VisualizerPos, media_keys};
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode, KeyModifiers},
@@ -200,6 +201,8 @@ impl RustPlay {
         // Receive info from player
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
+
+        let _media_keys = media_keys::start();
 
         if !args.no_term {
             Self::setup_term()?;

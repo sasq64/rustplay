@@ -13,6 +13,7 @@ use std::{
     sync::{LazyLock, Mutex},
 };
 
+pub mod media_keys;
 pub mod player;
 pub mod resampler;
 pub mod rustplay;
