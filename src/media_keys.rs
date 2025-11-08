@@ -1,6 +1,5 @@
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -16,25 +15,24 @@ pub enum MediaKeyEvent {
     Play,
     Pause,
     Stop,
+    Shutdown,
+    Playing,
+    Paused,
 }
 
-#[derive(Clone, Copy, Default)]
-pub struct CallCounts {
-    pub next_count: usize,
-    pub previous_count: usize,
-    pub play_pause_count: usize,
-    pub is_playing: bool,
+#[derive(Clone, Copy, Debug, Default)]
+pub struct PlayState {
+    is_playing: bool,
 }
 
 /// Main MPRIS interface implementation
 pub struct MainInterface {
-    call_counts: Arc<Mutex<CallCounts>>,
     event_sender: mpsc::Sender<MediaKeyEvent>,
 }
 
 impl MainInterface {
-    fn new(call_counts: Arc<Mutex<CallCounts>>, event_sender: mpsc::Sender<MediaKeyEvent>) -> Self {
-        MainInterface { call_counts, event_sender }
+    fn new(event_sender: mpsc::Sender<MediaKeyEvent>) -> Self {
+        MainInterface { event_sender }
     }
 }
 
@@ -71,13 +69,16 @@ impl MainInterface {
 
 /// MPRIS Media Player interface implementation
 pub struct MediaPlayer {
-    call_counts: Arc<Mutex<CallCounts>>,
+    play_state: Arc<Mutex<PlayState>>,
     event_sender: mpsc::Sender<MediaKeyEvent>,
 }
 
 impl MediaPlayer {
-    fn new(call_counts: Arc<Mutex<CallCounts>>, event_sender: mpsc::Sender<MediaKeyEvent>) -> Self {
-        MediaPlayer { call_counts, event_sender }
+    fn new(play_state: Arc<Mutex<PlayState>>, event_sender: mpsc::Sender<MediaKeyEvent>) -> Self {
+        MediaPlayer {
+            play_state,
+            event_sender,
+        }
     }
 }
 
@@ -85,8 +86,8 @@ impl MediaPlayer {
 impl MediaPlayer {
     #[zbus(property)]
     fn playback_status(&self) -> String {
-        if let Ok(counts) = self.call_counts.lock() {
-            if counts.is_playing {
+        if let Ok(ps) = self.play_state.lock() {
+            if ps.is_playing {
                 "Playing".to_string()
             } else {
                 "Stopped".to_string()
@@ -138,8 +139,8 @@ impl MediaPlayer {
 
     #[zbus(property)]
     fn can_play(&self) -> bool {
-        if let Ok(counts) = self.call_counts.lock() {
-            !counts.is_playing
+        if let Ok(play_state) = self.play_state.lock() {
+            !play_state.is_playing
         } else {
             true
         }
@@ -147,8 +148,8 @@ impl MediaPlayer {
 
     #[zbus(property)]
     fn can_pause(&self) -> bool {
-        if let Ok(counts) = self.call_counts.lock() {
-            counts.is_playing
+        if let Ok(play_state) = self.play_state.lock() {
+            play_state.is_playing
         } else {
             true
         }
@@ -166,46 +167,30 @@ impl MediaPlayer {
 
     fn next(&self) -> zbus::fdo::Result<()> {
         println!("[MPRIS] Next pressed");
-        if let Ok(mut counts) = self.call_counts.lock() {
-            counts.next_count += 1;
-        }
         let _ = self.event_sender.send(MediaKeyEvent::Next);
         Ok(())
     }
 
     fn previous(&self) -> zbus::fdo::Result<()> {
         println!("[MPRIS] Previous pressed");
-        if let Ok(mut counts) = self.call_counts.lock() {
-            counts.previous_count += 1;
-        }
         let _ = self.event_sender.send(MediaKeyEvent::Previous);
         Ok(())
     }
 
     fn play_pause(&self) -> zbus::fdo::Result<()> {
         println!("[MPRIS] PlayPause pressed");
-        if let Ok(mut counts) = self.call_counts.lock() {
-            counts.play_pause_count += 1;
-            counts.is_playing = !counts.is_playing;
-        }
         let _ = self.event_sender.send(MediaKeyEvent::PlayPause);
         Ok(())
     }
 
     fn play(&self) -> zbus::fdo::Result<()> {
         println!("[MPRIS] Play pressed");
-        if let Ok(mut counts) = self.call_counts.lock() {
-            counts.is_playing = true;
-        }
         let _ = self.event_sender.send(MediaKeyEvent::Play);
         Ok(())
     }
 
     fn pause(&self) -> zbus::fdo::Result<()> {
         println!("[MPRIS] Pause pressed");
-        if let Ok(mut counts) = self.call_counts.lock() {
-            counts.is_playing = false;
-        }
         let _ = self.event_sender.send(MediaKeyEvent::Pause);
         Ok(())
     }
@@ -217,20 +202,32 @@ impl MediaPlayer {
 }
 
 /// Start the MPRIS listener in a background thread
-/// Returns (shutdown_flag, event_receiver, service_name)
-pub fn start_with_name(service_name: &str) -> (Arc<AtomicBool>, mpsc::Receiver<MediaKeyEvent>, String) {
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let call_counts = Arc::new(Mutex::new(CallCounts::default()));
+/// Returns (shutdown_sender, event_receiver, service_name)
+pub fn start_with_name(
+    service_name: &str,
+) -> (
+    mpsc::Sender<MediaKeyEvent>,
+    mpsc::Receiver<MediaKeyEvent>,
+    String,
+) {
+    let play_state = Arc::new(Mutex::new(PlayState::default()));
     let (event_sender, event_receiver) = mpsc::channel();
-    let shutdown_clone = shutdown.clone();
-    let counts_clone = call_counts.clone();
+    let (shutdown_sender, shutdown_receiver) = mpsc::channel();
+    let state_clone = play_state.clone();
     let service_name_owned = service_name.to_string();
     let service_name_for_thread = service_name_owned.clone();
 
     thread::spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
         rt.block_on(async {
-            match setup_mpris(shutdown_clone, counts_clone, &service_name_for_thread, event_sender).await {
+            match setup_mpris(
+                shutdown_receiver,
+                state_clone,
+                &service_name_for_thread,
+                event_sender,
+            )
+            .await
+            {
                 Ok(_) => {
                     println!("[MPRIS] Listener started successfully");
                 }
@@ -241,19 +238,19 @@ pub fn start_with_name(service_name: &str) -> (Arc<AtomicBool>, mpsc::Receiver<M
         });
     });
 
-    (shutdown, event_receiver, service_name_owned)
+    (shutdown_sender, event_receiver, service_name_owned)
 }
 
 /// Start the MPRIS listener in a background thread with default service name
-/// Returns (shutdown_flag, event_receiver)
-pub fn start() -> (Arc<AtomicBool>, mpsc::Receiver<MediaKeyEvent>) {
-    let (shutdown, event_receiver, _) = start_with_name("org.mpris.MediaPlayer2.oldplay");
-    (shutdown, event_receiver)
+/// Returns (shutdown_sender, event_receiver)
+pub fn start() -> (mpsc::Sender<MediaKeyEvent>, mpsc::Receiver<MediaKeyEvent>) {
+    let (shutdown_sender, event_receiver, _) = start_with_name("org.mpris.MediaPlayer2.oldplay");
+    (shutdown_sender, event_receiver)
 }
 
 async fn setup_mpris(
-    shutdown: Arc<AtomicBool>,
-    call_counts: Arc<Mutex<CallCounts>>,
+    event_receiver: mpsc::Receiver<MediaKeyEvent>,
+    play_state: Arc<Mutex<PlayState>>,
     service_name: &str,
     event_sender: mpsc::Sender<MediaKeyEvent>,
 ) -> Result<(), zbus::Error> {
@@ -263,8 +260,8 @@ async fn setup_mpris(
     connection.request_name(service_name).await?;
 
     // Register both the main interface and the player interface at the standard MPRIS path
-    let main = MainInterface::new(call_counts.clone(), event_sender.clone());
-    let player = MediaPlayer::new(call_counts, event_sender);
+    let main = MainInterface::new(event_sender.clone());
+    let player = MediaPlayer::new(play_state.clone(), event_sender);
 
     connection
         .object_server()
@@ -279,8 +276,24 @@ async fn setup_mpris(
     println!("[MPRIS] Registered as {}", service_name);
 
     // Keep the connection alive until shutdown is signaled
-    while !shutdown.load(Ordering::Relaxed) {
-        tokio::time::sleep(Duration::from_millis(100)).await;
+    loop {
+        match event_receiver.try_recv() {
+            Ok(MediaKeyEvent::Shutdown) => break,
+            Ok(MediaKeyEvent::Playing) => {
+                if let Ok(mut ps) = play_state.lock() {
+                    ps.is_playing = true
+                }
+            }
+            Ok(MediaKeyEvent::Paused) => {
+                if let Ok(mut ps) = play_state.lock() {
+                    ps.is_playing = false
+                }
+            }
+            Ok(_) => {} // Ignore other events on this receiver
+            Err(_) => {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        }
     }
 
     connection.release_name(service_name).await?;
@@ -310,7 +323,7 @@ mod tests {
     fn test_mpris_next() {
         // Start the listener with a unique name for this test
         let service_name = "org.mpris.MediaPlayer2.oldplay.next_test";
-        let (shutdown, event_receiver, _) = start_with_name(service_name);
+        let (event_sender, event_receiver, _) = start_with_name(service_name);
 
         // Wait for D-Bus registration with verification
         let mut attempts = 0;
@@ -371,14 +384,14 @@ mod tests {
         );
 
         // Cleanup
-        shutdown.store(true, Ordering::Relaxed);
+        let _ = event_sender.send(MediaKeyEvent::Shutdown);
         thread::sleep(Duration::from_millis(200));
     }
 
     #[test]
     fn test_mpris_previous() {
         let service_name = "org.mpris.MediaPlayer2.oldplay.previous_test";
-        let (shutdown, event_receiver, _) = start_with_name(service_name);
+        let (event_sender, event_receiver, _) = start_with_name(service_name);
 
         let mut attempts = 0;
         while !verify_service_registered(service_name) && attempts < 20 {
@@ -436,14 +449,14 @@ mod tests {
             "Expected MediaKeyEvent::Previous"
         );
 
-        shutdown.store(true, Ordering::Relaxed);
+        let _ = event_sender.send(MediaKeyEvent::Shutdown);
         thread::sleep(Duration::from_millis(200));
     }
 
     #[test]
     fn test_mpris_play_pause() {
         let service_name = "org.mpris.MediaPlayer2.oldplay.playpause_test";
-        let (shutdown, event_receiver, _) = start_with_name(service_name);
+        let (event_sender, event_receiver, _) = start_with_name(service_name);
 
         let mut attempts = 0;
         while !verify_service_registered(service_name) && attempts < 20 {
@@ -501,7 +514,7 @@ mod tests {
             "Expected MediaKeyEvent::PlayPause"
         );
 
-        shutdown.store(true, Ordering::Relaxed);
+        let _ = event_sender.send(MediaKeyEvent::Shutdown);
         thread::sleep(Duration::from_millis(200));
     }
 }

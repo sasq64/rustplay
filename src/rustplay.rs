@@ -8,7 +8,6 @@ use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
 use std::io::{self, Cursor, Write as _, stdout};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
 use std::{fs, panic};
@@ -190,7 +189,7 @@ pub struct RustPlay {
     current_song: usize,
     scripting: Scripting,
     media_keys_receiver: mpsc::Receiver<media_keys::MediaKeyEvent>,
-    media_keys_shutdown: Arc<AtomicBool>,
+    media_sender: mpsc::Sender<MediaKeyEvent>,
 }
 impl RustPlay {
     /// Create a new instance of `RustPlay` using parsed command line arguments in `args`.
@@ -205,7 +204,7 @@ impl RustPlay {
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
 
-        let (media_keys_shutdown, media_keys_receiver) = media_keys::start();
+        let (media_sender, media_keys_receiver) = media_keys::start();
 
         if !args.no_term {
             Self::setup_term()?;
@@ -288,7 +287,7 @@ impl RustPlay {
             current_song: 0,
             scripting,
             media_keys_receiver,
-            media_keys_shutdown,
+            media_sender,
         })
     }
     fn setup_term() -> io::Result<()> {
@@ -498,6 +497,11 @@ impl RustPlay {
         self.menu_component.resize(width as usize, height as usize);
     }
 
+    pub fn play_pause(&mut self) {
+        self.send_cmd(Player::play_pause);
+        self.media_sender.send(MediaKeyEvent::Playing);
+    }
+
     pub fn handle_keys(&mut self) -> Result<bool> {
         if self.no_term {
             return Ok(false);
@@ -519,7 +523,7 @@ impl RustPlay {
                         KeyCode::Char('c') if ctrl => self.state.quit = true,
                         KeyCode::Char('n') if ctrl => self.next(),
                         KeyCode::Char('p') if ctrl => self.prev(),
-                        KeyCode::Char('y') if ctrl => self.send_cmd(Player::play_pause),
+                        KeyCode::Char('y') if ctrl => self.play_pause(),
                         KeyCode::Right => self.send_cmd(Player::next_song),
                         KeyCode::Left => self.send_cmd(Player::prev_song),
                         _ => handled = false,
@@ -535,7 +539,7 @@ impl RustPlay {
                                     self.state.mode = InputMode::SearchInput
                                 }
                                 KeyCode::Char('n') => self.next(),
-                                KeyCode::Char(' ') => self.send_cmd(Player::play_pause),
+                                KeyCode::Char(' ') => self.play_pause(),
                                 KeyCode::Char('p') => self.prev(),
                                 KeyCode::Char('f') => self.send_cmd(|player| player.ff(10000)),
                                 KeyCode::Right => self.send_cmd(Player::next_song),
@@ -678,6 +682,9 @@ impl RustPlay {
             match cmd {
                 MediaKeyEvent::Next => self.next(),
                 MediaKeyEvent::Previous => self.prev(),
+                MediaKeyEvent::Play => self.play_pause(),
+                MediaKeyEvent::Pause => self.play_pause(),
+                MediaKeyEvent::PlayPause => self.play_pause(),
                 _ => (),
             }
         }
@@ -706,7 +713,7 @@ impl RustPlay {
         }
 
         // Shutdown media keys listener
-        self.media_keys_shutdown.store(true, Ordering::Relaxed);
+        let _ = self.media_sender.send(MediaKeyEvent::Shutdown);
 
         if let Some(t) = self.player_thread.take()
             && let Err(err) = t.join()
