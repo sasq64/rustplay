@@ -13,12 +13,12 @@ use std::sync::{Arc, mpsc};
 use std::{fs, panic};
 use std::{path::Path, thread::JoinHandle};
 
-use crate::media_keys::{MediaKeyEvent, MediaKeyInfo};
-use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
+use crate::media_keys::{self, MediaKeyEvent, MediaKeyInfo};
+use crate::player::{Cmd, Info, PlayResult, Player, PlayState};
 use crate::templ::Template;
 use crate::value::Value;
 use crate::{Args, log};
-use crate::{VisualizerPos, media_keys};
+use crate::VisualizerPos;
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode, KeyModifiers},
@@ -188,7 +188,7 @@ pub struct RustPlay {
     current_list: Option<Box<dyn SongCollection>>,
     current_song: usize,
     scripting: Scripting,
-    media_keys_receiver: mpsc::Receiver<media_keys::MediaKeyEvent>,
+    media_keys_receiver: mpsc::Receiver<MediaKeyEvent>,
     media_sender: mpsc::Sender<MediaKeyInfo>,
 }
 impl RustPlay {
