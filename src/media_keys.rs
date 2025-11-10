@@ -342,8 +342,28 @@ pub fn start() -> (mpsc::Sender<MediaKeyInfo>, mpsc::Receiver<MediaKeyEvent>) {
 
 #[cfg(not(target_os = "linux"))]
 pub fn start() -> (mpsc::Sender<MediaKeyInfo>, mpsc::Receiver<MediaKeyEvent>) {
-    // Return dummy channels that do nothing
-    let (info_sender, _info_receiver) = mpsc::channel();
-    let (_event_sender, event_receiver) = mpsc::channel();
+    use std::thread;
+    use std::time::Duration;
+
+    // Create channels for communication
+    let (info_sender, info_receiver) = mpsc::channel();
+    let (event_sender, event_receiver) = mpsc::channel();
+
+    // Spawn a dummy thread that keeps the channels alive by reading from them
+    thread::spawn(move || {
+        loop {
+            // Try to receive info messages (like play state updates)
+            match info_receiver.try_recv() {
+                Ok(MediaKeyInfo::Shutdown) => break,
+                Ok(_) => {}, // Ignore other messages
+                Err(_) => {
+                    thread::sleep(Duration::from_millis(100));
+                }
+            }
+        }
+        // event_sender is held here and dropped when thread exits
+        drop(event_sender);
+    });
+
     (info_sender, event_receiver)
 }

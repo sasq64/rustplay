@@ -1,6 +1,6 @@
 [package]
 name = "oldplay"
-version = "0.2.4"
+version = "0.2.5"
 authors = ["Jonas Minnberg <sasq64@gmail.com>"]
 edition = "2024"
 license = "MIT"
