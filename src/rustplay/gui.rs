@@ -1,4 +1,4 @@
-use super::{indexer::RemoteIndexer, song::FileInfo};
+use super::song::FileInfo;
 use crate::term_extra::SetReverse;
 use anyhow::Result;
 use crossterm::{
@@ -15,7 +15,7 @@ use std::io::{Write, stdout};
 pub enum KeyReturn {
     Quit,
     Nothing,
-    PlaySong(FileInfo),
+    PlaySong(usize),
     Search(String),
     ExitMenu,
     Navigate,
@@ -39,7 +39,7 @@ impl SongMenu {
         Color::Rgb { r: x, g: x, b: x }
     }
 
-    pub fn draw(&mut self, indexer: &mut RemoteIndexer) -> Result<()> {
+    pub fn draw(&mut self, files: &[FileInfo]) -> Result<()> {
         if self.fader.len() != self.height {
             self.fader.resize(self.height, 0);
         }
@@ -49,7 +49,8 @@ impl SongMenu {
         }
         out.queue(cursor::MoveTo(0, 0))?;
         let start = self.start_pos;
-        let songs = indexer.get_songs(start, start + self.height)?;
+        //let songs = rust_play.get_songs(start, start + self.height)?;
+        let songs = &files[start..start + self.height];
         if self.use_color {
             self.fader[self.selected - self.start_pos] = 10;
             for (i, song) in songs.into_iter().enumerate() {
@@ -106,12 +107,7 @@ impl SongMenu {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    pub fn handle_key(
-        &mut self,
-        indexer: &mut RemoteIndexer,
-        key: event::KeyEvent,
-    ) -> Result<KeyReturn> {
-        let song_len = indexer.result_len();
+    pub fn handle_key(&mut self, song_len: usize, key: event::KeyEvent) -> Result<KeyReturn> {
         let old_selected = self.selected;
         match key.code {
             KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
@@ -131,9 +127,7 @@ impl SongMenu {
             KeyCode::PageDown => self.selected += self.height,
             KeyCode::Down => self.selected += 1,
             KeyCode::Enter => {
-                if let Some(s) = indexer.get_song(self.selected) {
-                    return Ok(KeyReturn::PlaySong(s));
-                }
+                return Ok(KeyReturn::PlaySong(self.selected));
             }
             _ => {}
         }

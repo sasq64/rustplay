@@ -13,12 +13,12 @@ use std::sync::{Arc, mpsc};
 use std::{fs, panic};
 use std::{path::Path, thread::JoinHandle};
 
+use crate::VisualizerPos;
 use crate::media_keys::{self, MediaKeyEvent, MediaKeyInfo};
-use crate::player::{Cmd, Info, PlayResult, Player, PlayState};
+use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
 use crate::templ::Template;
 use crate::value::Value;
 use crate::{Args, log};
-use crate::VisualizerPos;
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode, KeyModifiers},
@@ -190,6 +190,7 @@ pub struct RustPlay {
     scripting: Scripting,
     media_keys_receiver: mpsc::Receiver<MediaKeyEvent>,
     media_sender: mpsc::Sender<MediaKeyInfo>,
+    result: Vec<FileInfo>,
 }
 impl RustPlay {
     /// Create a new instance of `RustPlay` using parsed command line arguments in `args`.
@@ -288,6 +289,7 @@ impl RustPlay {
             scripting,
             media_keys_receiver,
             media_sender,
+            result: Vec::new(),
         })
     }
     fn setup_term() -> io::Result<()> {
@@ -407,7 +409,7 @@ impl RustPlay {
         }
 
         if self.state.mode == InputMode::ResultScreen {
-            self.menu_component.draw(&mut self.indexer)?;
+            self.menu_component.draw(&self.result)?;
             return Ok(());
         }
 
@@ -477,7 +479,7 @@ impl RustPlay {
 
     fn search(&mut self, query: &str) -> Result<()> {
         log!("Searching for {}", query);
-        self.indexer.search(query)?;
+        self.result = self.indexer.search(query)?;
         Ok(())
     }
 
@@ -505,12 +507,10 @@ impl RustPlay {
         if self.no_term {
             return Ok(false);
         }
-        let ms = std::time::Duration::from_millis(40);
-        if !event::poll(ms)? {
+        if !event::poll(std::time::Duration::from_millis(40))? {
             return Ok(false);
         }
-        let e = event::read()?;
-        match e {
+        match event::read()? {
             Event::Resize(width, height) => {
                 self.handle_resize(width, height);
             }
@@ -547,20 +547,19 @@ impl RustPlay {
                                 | KeyCode::PageDown
                                 | KeyCode::Up
                                 | KeyCode::Down => {
-                                    if self.indexer.result_len() > 0 {
+                                    if !self.result.is_empty() {
                                         self.state.mode = InputMode::ResultScreen;
-                                        self.menu_component.handle_key(&mut self.indexer, key)?;
+                                        self.menu_component.handle_key(self.result.len(), key)?;
                                     }
                                 }
                                 _ => {}
                             }
                         } else if self.state.mode == InputMode::ResultScreen {
-                            match self.menu_component.handle_key(&mut self.indexer, key)? {
-                                KeyReturn::PlaySong(song) => {
-                                    self.current_list = self.indexer.get_song_result();
-                                    if let Some(cl) = &self.current_list {
-                                        self.current_song = cl.index_of(&song).unwrap_or(0);
-                                    }
+                            match self.menu_component.handle_key(self.result.len(), key)? {
+                                KeyReturn::PlaySong(song_no) => {
+                                    // self.current_list = self.indexer.get_song_result();
+                                    // self.current_song = self.result.index_of(&song).unwrap_or(0);
+                                    let song = self.result[song_no].clone();
                                     self.play_song(&song);
                                     self.state.changed = true;
                                     self.state.mode = self.state.last_mode;
@@ -581,7 +580,7 @@ impl RustPlay {
                             match self.search_component.handle_key(key)? {
                                 KeyReturn::Search(query) => {
                                     self.search(&query)?;
-                                    if self.indexer.result_len() > 0 {
+                                    if !self.result.is_empty() {
                                         self.state.mode = InputMode::ResultScreen;
                                         self.menu_component.start_pos = 0;
                                         self.menu_component.selected = 0;
@@ -598,9 +597,9 @@ impl RustPlay {
                                 }
                                 KeyReturn::Navigate => {
                                     self.state.changed = true;
-                                    if self.indexer.result_len() > 0 {
+                                    if !self.result.is_empty() {
                                         self.state.mode = InputMode::ResultScreen;
-                                        self.menu_component.handle_key(&mut self.indexer, key)?;
+                                        self.menu_component.handle_key(self.result.len(), key)?;
                                     }
                                 }
                                 _ => {}
