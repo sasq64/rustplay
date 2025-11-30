@@ -19,6 +19,7 @@ pub mod resampler;
 pub mod rustplay;
 pub mod templ;
 pub mod term_extra;
+pub mod utils;
 pub mod value;
 
 pub use rustplay::RustPlay;

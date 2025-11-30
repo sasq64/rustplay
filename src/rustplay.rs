@@ -2,21 +2,19 @@ use anyhow::Result;
 use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
 use musix::MusicError;
-use rhai::FnPtr;
 use scripting::Scripting;
-use std::collections::{HashMap, VecDeque};
 use std::fmt::Display;
-use std::io::{self, Cursor, Write as _, stdout};
-use std::path::PathBuf;
+use std::io::{self, Write as _, stdout};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
-use std::{fs, panic};
-use std::{path::Path, thread::JoinHandle};
+use std::{panic, thread::JoinHandle};
 
 use crate::VisualizerPos;
 use crate::media_keys::{self, MediaKeyEvent, MediaKeyInfo};
 use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
 use crate::templ::Template;
+use crate::utils::{extract_zip, make_color};
 use crate::value::Value;
 use crate::{Args, log};
 use crossterm::{
@@ -31,145 +29,14 @@ mod gui;
 mod indexer;
 mod scripting;
 mod song;
+mod state;
 
 use crate::term_extra::{MaybeCommand, SetReverse};
 
 use song::{FileInfo, SongCollection};
 
 use indexer::RemoteIndexer;
-
-#[derive(Clone, Debug, Default)]
-pub struct TemplateVar {
-    color: Option<u32>,
-    alias: Option<String>,
-    func: Option<FnPtr>,
-}
-
-#[derive(Default, Debug, Clone, Copy, PartialEq)]
-enum InputMode {
-    #[default]
-    Main,
-    SearchInput,
-    ResultScreen,
-}
-
-#[derive(Default)]
-struct State {
-    changed: bool,
-    meta: HashMap<String, Value>,
-    song: i32,
-    songs: i32,
-    len_msec: usize,
-    done: bool,
-    show_error: i32,
-    mode: InputMode,
-    last_mode: InputMode,
-    quit: bool,
-    use_color: bool,
-    errors: VecDeque<String>,
-    player_started: bool,
-    width: i32,
-    height: i32,
-}
-
-impl State {
-    pub fn update_meta(&mut self, meta: &str, val: Value) {
-        match val {
-            Value::Number(n) => {
-                self.changed = true;
-                let i = n as i32;
-                match meta {
-                    "done" => self.done = true,
-                    "length" => {
-                        self.meta.insert(
-                            "len".to_owned(),
-                            if i > 0 {
-                                Value::Text(format!("{:02}:{:02}", i / 60, i % 60).to_owned())
-                            } else {
-                                Value::Text("??:??".to_owned())
-                            },
-                        );
-                    }
-                    "song" => {
-                        self.song = i;
-                        self.meta.insert("isong".into(), (i + 1).into());
-                    }
-                    "songs" => self.songs = i,
-                    &_ => {}
-                }
-            }
-            Value::Text(ref t) => {
-                if t.is_empty() {
-                    return;
-                }
-                self.changed = true;
-            }
-            Value::Error(ref e) => {
-                self.errors.push_back((*e).to_string());
-            }
-            Value::State(_) | Value::Data(_) | Value::Unknown => {}
-        }
-
-        self.meta.insert(meta.to_owned(), val);
-    }
-
-    fn get_meta(&self, name: &str) -> &str {
-        if let Some(Value::Text(t)) = self.meta.get(name) {
-            return t;
-        }
-        ""
-    }
-
-    fn get_meta_or<'a>(&'a self, name: &str, def: &'a str) -> &'a str {
-        if let Some(Value::Text(t)) = self.meta.get(name) {
-            return t;
-        }
-        def
-    }
-
-    fn set_meta(&mut self, what: &str, value: String) {
-        self.meta.insert(what.into(), Value::Text(value));
-    }
-
-    fn clear_meta(&mut self) {
-        self.meta.iter_mut().for_each(|(_, val)| match val {
-            Value::Text(t) => *t = String::new(),
-            Value::Number(n) => *n = 0.0,
-            _ => (),
-        });
-    }
-}
-
-fn extract_zip(data_zip: &[u8], dd: &Path) -> Result<()> {
-    let cursor = Cursor::new(data_zip);
-    let mut archive = zip::ZipArchive::new(cursor)?;
-    for i in 0..archive.len() {
-        let mut file = archive.by_index(i)?;
-        let outpath = match file.enclosed_name() {
-            Some(path) => dd.join(path),
-            None => continue,
-        };
-        if file.is_dir() {
-            fs::create_dir_all(&outpath)?;
-        } else {
-            if let Some(p) = outpath.parent()
-                && !p.exists()
-            {
-                fs::create_dir_all(p)?;
-            }
-            let mut outfile = fs::File::create(&outpath)?;
-            io::copy(&mut file, &mut outfile)?;
-        }
-    }
-    Ok(())
-}
-
-fn make_color(color: u32) -> Color {
-    let r = (color >> 16) as u8;
-    let g = ((color >> 8) & 0xff) as u8;
-    let b = (color & 0xff) as u8;
-    Color::Rgb { r, g, b }
-}
+use state::{InputMode, State};
 
 pub struct RustPlay {
     cmd_producer: mpsc::Sender<Cmd>,
