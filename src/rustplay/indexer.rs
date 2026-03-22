@@ -25,6 +25,7 @@ use walkdir::WalkDir;
 
 use crate::value::Value;
 
+use super::gui::SongList;
 use super::song::{FileInfo, SongArray, SongCollection};
 
 #[inline]
@@ -41,7 +42,7 @@ fn slice_to_string(slice: &[u8]) -> String {
 const INITIAL_SONG_COUNT: usize = 100;
 
 /// An Tantivity indexer that indexes song files.
-pub struct Indexer {
+pub struct SongIndexer {
     schema: Schema,
     index: Index,
     index_writer: IndexWriter,
@@ -77,7 +78,7 @@ fn get_string(doc: &TantivyDocument, field: Field) -> Result<String> {
     Ok(String::new())
 }
 
-impl Indexer {
+impl SongIndexer {
     pub fn new() -> Result<Self> {
         let mut schema_builder = Schema::builder();
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
@@ -259,7 +260,7 @@ impl Indexer {
 }
 
 pub struct IndexedSongs {
-    indexer: Arc<Mutex<Indexer>>,
+    indexer: Arc<Mutex<SongIndexer>>,
 }
 
 impl SongCollection for IndexedSongs {
@@ -283,11 +284,11 @@ impl SongCollection for IndexedSongs {
     }
 }
 
-pub struct RemoteIndexer {
-    indexer: Arc<Mutex<Indexer>>,
+pub struct RemoteSongIndexer {
+    indexer: Arc<Mutex<SongIndexer>>,
     sender: mpsc::Sender<Cmd>,
     index_thread: Option<JoinHandle<()>>,
-    working: Arc<AtomicBool>,
+    is_working: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -296,9 +297,9 @@ enum Cmd {
     Quit,
 }
 
-impl Drop for RemoteIndexer {
+impl Drop for RemoteSongIndexer {
     fn drop(&mut self) {
-        self.working.store(false, Ordering::Relaxed);
+        self.is_working.store(false, Ordering::Relaxed);
         let _ = self.sender.send(Cmd::Quit {});
         if let Some(t) = self.index_thread.take() {
             let _ = t.join();
@@ -306,15 +307,15 @@ impl Drop for RemoteIndexer {
     }
 }
 
-impl RemoteIndexer {
+impl RemoteSongIndexer {
     #[inline]
     #[allow(clippy::unwrap_used)]
-    fn lock(&self) -> MutexGuard<'_, Indexer> {
+    fn lock(&self) -> MutexGuard<'_, SongIndexer> {
         self.indexer.lock().unwrap()
     }
 
     fn run(
-        indexer: &Arc<Mutex<Indexer>>,
+        indexer: &Arc<Mutex<SongIndexer>>,
         working: &Arc<AtomicBool>,
         rx: &Receiver<Cmd>,
     ) -> Result<()> {
@@ -349,7 +350,7 @@ impl RemoteIndexer {
                             }
                         }
                         if p.file_type().is_file() && musix::can_handle(p.path())? {
-                            if let Some(info) = Indexer::identify_song(p.path())? {
+                            if let Some(info) = SongIndexer::identify_song(p.path())? {
                                 lock().add_with_info(p.path(), &info)?;
                             } else {
                                 lock().add_path(p.path())?;
@@ -367,8 +368,8 @@ impl RemoteIndexer {
         }
     }
 
-    pub fn new() -> Result<RemoteIndexer> {
-        let indexer = Arc::new(Mutex::new(Indexer::new()?));
+    pub fn new() -> Result<RemoteSongIndexer> {
+        let indexer = Arc::new(Mutex::new(SongIndexer::new()?));
         let (sender, rx) = mpsc::channel::<Cmd>();
 
         let working = Arc::new(AtomicBool::new(false));
@@ -378,19 +379,19 @@ impl RemoteIndexer {
             thread::Builder::new()
                 .name("index_thread".into())
                 .spawn(move || {
-                    RemoteIndexer::run(&indexer, &working, &rx).expect("Fail");
+                    RemoteSongIndexer::run(&indexer, &working, &rx).expect("Fail");
                 })?
         });
-        Ok(RemoteIndexer {
+        Ok(RemoteSongIndexer {
             indexer,
             sender,
             index_thread,
-            working,
+            is_working: working,
         })
     }
 
     pub fn add_path(&self, path: &Path) -> Result<()> {
-        self.working.store(true, Ordering::Relaxed);
+        self.is_working.store(true, Ordering::Relaxed);
         self.sender.send(Cmd::AddPath(path.to_owned()))?;
         Ok(())
     }
@@ -442,7 +443,21 @@ impl RemoteIndexer {
     }
 
     pub(crate) fn working(&self) -> bool {
-        self.working.load(Ordering::Relaxed)
+        self.is_working.load(Ordering::Relaxed)
+    }
+}
+
+impl SongList for RemoteSongIndexer {
+    fn get_songs(&self, start: usize, stop: usize) -> Vec<FileInfo> {
+        self.get_songs(start, stop).unwrap_or_default()
+    }
+
+    fn song_len(&self) -> usize {
+        self.result_len()
+    }
+
+    fn get_song(&self, index: usize) -> Option<FileInfo> {
+        self.get_song(index)
     }
 }
 
@@ -453,20 +468,20 @@ mod tests {
 
     use walkdir::WalkDir;
 
-    use crate::rustplay::indexer::RemoteIndexer;
+    use crate::rustplay::indexer::RemoteSongIndexer;
 
-    use super::Indexer;
+    use super::SongIndexer;
 
     #[test]
     fn identify_works() {
         let path: PathBuf = "../musicplayer/music/C64/Ark_Pandora.sid".into();
-        let info = Indexer::identify_song(&path).unwrap().unwrap();
+        let info = SongIndexer::identify_song(&path).unwrap().unwrap();
         assert_eq!(info.title, "Ark Pandora");
     }
 
     #[test]
     fn normal_search_works() {
-        let mut indexer = Indexer::new().unwrap();
+        let mut indexer = SongIndexer::new().unwrap();
         let path: PathBuf = "../musicplayer/music/C64/Ark_Pandora.sid".into();
         let info = musix::identify_song(&path).unwrap();
         indexer.add_with_info(&path, &info).unwrap();
@@ -505,7 +520,7 @@ mod tests {
 
     #[test]
     fn threaded_search_works() {
-        let mut indexer = RemoteIndexer::new().unwrap();
+        let mut indexer = RemoteSongIndexer::new().unwrap();
         let path: PathBuf = "../musicplayer/music".into();
         indexer.add_path(&path).unwrap();
         while indexer.working() {
