@@ -21,14 +21,28 @@ impl FileInfo {
         self.meta_data.get(what).unwrap_or(&Value::Unknown)
     }
 
+    pub fn get_title(&self) -> &str {
+        if let Value::Text(title) = self.get("title") {
+            if title.is_empty()
+                && let Value::Text(game) = self.get("game")
+            {
+                game
+            } else {
+                title
+            }
+        } else {
+            ""
+        }
+    }
+
     pub fn title_and_composer(&self) -> String {
-        let title = self.get("title");
+        let title = self.get_title();
         let composer = self.get("composer");
         format!("{title} / {composer}")
     }
 
     pub fn full_song_name(&self) -> String {
-        let title = self.get("title");
+        let title = self.get_title();
         let composer = self.get("composer");
         let file_name = self.path.file_name().map(|s| s.to_string_lossy());
         if composer != &Value::Unknown {
@@ -41,13 +55,6 @@ impl FileInfo {
             return file_name.to_string();
         }
         "???".into()
-    }
-
-    pub fn title(&self) -> Option<&str> {
-        if let Some(Value::Text(title)) = self.meta_data.get("title") {
-            return Some(title);
-        }
-        None
     }
 }
 

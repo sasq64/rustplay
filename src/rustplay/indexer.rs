@@ -112,11 +112,11 @@ impl SongIndexer {
 
     pub fn add_song(&mut self, file_info: &FileInfo) -> Result<()> {
         let count = self.count.fetch_add(1, Ordering::Relaxed);
-        let title = file_info.get("title");
+        let title = file_info.get_title();
         let composer = file_info.get("composer");
 
         self.index_writer.add_document(doc!(
-                self.title_field => title.to_string(),
+                self.title_field => title,
                 self.index_field => count as u64,
                 self.composer_field => composer.to_string(),
                 self.path_field => file_info.path.to_str().context("Illegal path")?
