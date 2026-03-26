@@ -1,5 +1,5 @@
 use super::song::FileInfo;
-use crate::term_extra::SetReverse;
+use crate::{rustplay::song::SongCollection, term_extra::SetReverse};
 use anyhow::Result;
 use crossterm::{
     QueueableCommand,
@@ -9,31 +9,6 @@ use crossterm::{
     terminal::{Clear, ClearType},
 };
 use std::io::{Write, stdout};
-
-// Trait for anything that can provide a list of songs to the menu
-pub trait SongList {
-    fn get_songs(&self, start: usize, stop: usize) -> Vec<FileInfo>;
-    fn song_len(&self) -> usize;
-    fn get_song(&self, index: usize) -> Option<FileInfo>;
-}
-
-impl SongList for Vec<FileInfo> {
-    fn get_songs(&self, start: usize, stop: usize) -> Vec<FileInfo> {
-        let end = stop.min(self.len());
-        if start >= end {
-            return Vec::new();
-        }
-        self[start..end].to_vec()
-    }
-
-    fn song_len(&self) -> usize {
-        self.len()
-    }
-
-    fn get_song(&self, index: usize) -> Option<FileInfo> {
-        self.get(index).cloned()
-    }
-}
 
 // SONG MENU
 
@@ -52,7 +27,7 @@ pub struct SongMenu {
     pub selected: usize,
     pub width: usize,
     pub height: usize,
-    pub fader: Vec<i32>,
+    pub fader: Vec<u32>,
     pub use_color: bool,
     scrolled: bool,
     moved: bool,
@@ -64,7 +39,7 @@ impl SongMenu {
         Color::Rgb { r: x, g: x, b: x }
     }
 
-    pub fn draw(&mut self, song_list: &dyn SongList) -> Result<()> {
+    pub fn draw(&mut self, song_list: &dyn SongCollection) -> Result<()> {
         if self.fader.len() != self.height {
             self.fader.resize(self.height, 0);
         }
@@ -74,10 +49,11 @@ impl SongMenu {
         }
         out.queue(cursor::MoveTo(0, 0))?;
         let start = self.start_pos;
-        let songs = song_list.get_songs(start, start + self.height);
+        let end = (start + self.height).clamp(start, song_list.len());
+        let songs = &song_list.get_range(start, end);
         if self.use_color {
             self.fader[self.selected - self.start_pos] = 10;
-            for (i, song) in songs.into_iter().enumerate() {
+            for (i, song) in songs.iter().enumerate() {
                 let name = song.full_song_name();
                 let name = if name.len() > (self.width - 1) {
                     name.chars().take(self.width - 1).collect()
@@ -87,14 +63,12 @@ impl SongMenu {
                 out.queue(SetForegroundColor(self.fade(i)))?
                     .queue(Print(name))?
                     .queue(MoveToNextLine(1))?;
-                if self.fader[i] > 0 {
-                    self.fader[i] -= 1;
-                }
+                self.fader[i] = self.fader[i].saturating_sub(1);
             }
         } else {
             let normal_bg = SetReverse(false);
             let cursor_bg = SetReverse(true);
-            for (i, song) in songs.into_iter().enumerate() {
+            for (i, song) in songs.iter().enumerate() {
                 out.queue(if i == self.selected - start {
                     &cursor_bg
                 } else {
@@ -133,10 +107,10 @@ impl SongMenu {
     #[allow(clippy::unnecessary_wraps)]
     pub fn handle_key(
         &mut self,
-        song_list: &dyn SongList,
+        song_list: &dyn SongCollection,
         key: event::KeyEvent,
     ) -> Result<KeyReturn> {
-        let song_len = song_list.song_len();
+        let song_len = song_list.len();
         let old_selected = self.selected;
         match key.code {
             KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
@@ -156,9 +130,7 @@ impl SongMenu {
             KeyCode::PageDown => self.selected += self.height,
             KeyCode::Down => self.selected += 1,
             KeyCode::Enter => {
-                if let Some(s) = song_list.get_song(self.selected) {
-                    return Ok(KeyReturn::PlaySong(s));
-                }
+                return Ok(KeyReturn::PlaySong(song_list.get(self.selected).clone()));
             }
             _ => {}
         }

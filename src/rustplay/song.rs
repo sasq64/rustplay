@@ -9,7 +9,7 @@ use crate::value::Value;
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct FileInfo {
     pub path: PathBuf,
-    pub meta_data: HashMap<String, Value>
+    pub meta_data: HashMap<String, Value>,
 }
 
 impl FileInfo {
@@ -51,6 +51,7 @@ impl FileInfo {
     }
 }
 
+#[derive(Default)]
 pub struct SongArray {
     pub songs: Vec<FileInfo>,
 }
@@ -59,6 +60,14 @@ pub trait SongCollection {
     fn get(&self, index: usize) -> FileInfo;
     fn index_of(&self, song: &FileInfo) -> Option<usize>;
     fn len(&self) -> usize;
+
+    fn get_range(&self, start: usize, end: usize) -> Vec<FileInfo> {
+        (start..end).map(|i| self.get(i)).collect()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 
 impl SongCollection for SongArray {

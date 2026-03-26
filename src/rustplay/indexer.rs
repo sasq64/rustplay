@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
@@ -449,10 +450,10 @@ impl RemoteSongIndexer {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    pub(crate) fn get_all_songs(&self) -> Option<Box<dyn SongCollection>> {
-        Some(Box::new(IndexedSongs {
+    pub(crate) fn get_all_songs(&self) -> Rc<dyn SongCollection> {
+        Rc::new(IndexedSongs {
             indexer: self.indexer.clone(),
-        }))
+        })
     }
 
     pub(crate) fn working(&self) -> bool {

@@ -101,138 +101,138 @@ mod linux_impl {
 
     #[interface(name = "org.mpris.MediaPlayer2.Player")]
     impl MediaPlayer {
-    #[zbus(property)]
-    fn playback_status(&self) -> String {
-        if let Ok(ps) = self.play_state.lock() {
-            if ps.is_playing {
-                "Playing".to_string()
+        #[zbus(property)]
+        fn playback_status(&self) -> String {
+            if let Ok(ps) = self.play_state.lock() {
+                if ps.is_playing {
+                    "Playing".to_string()
+                } else {
+                    "Paused".to_string()
+                }
             } else {
-                "Paused".to_string()
+                "Stopped".to_string()
             }
-        } else {
-            "Stopped".to_string()
         }
-    }
 
-    #[zbus(property)]
-    fn rate(&self) -> f64 {
-        1.0
-    }
-
-    #[zbus(property)]
-    fn metadata(&self) -> std::collections::HashMap<String, zbus::zvariant::Value> {
-        use zbus::zvariant::ObjectPath;
-        let mut metadata = std::collections::HashMap::new();
-        if let Ok(track_id) = ObjectPath::try_from("/org/mpris/MediaPlayer2/Track/1") {
-            metadata.insert(
-                "mpris:trackid".to_string(),
-                zbus::zvariant::Value::new(track_id),
-            );
+        #[zbus(property)]
+        fn rate(&self) -> f64 {
+            1.0
         }
-        if let Ok(ps) = self.play_state.lock() {
-            metadata.insert(
-                "xesam:title".to_string(),
-                zbus::zvariant::Value::new(ps.title.to_string()),
-            );
-            metadata.insert(
-                "xesam:artist".to_string(),
-                zbus::zvariant::Value::Array(zbus::zvariant::Array::from(vec![
-                    ps.author.to_string(),
-                ])),
-            );
+
+        #[zbus(property)]
+        fn metadata(&self) -> std::collections::HashMap<String, zbus::zvariant::Value<'_>> {
+            use zbus::zvariant::ObjectPath;
+            let mut metadata = std::collections::HashMap::new();
+            if let Ok(track_id) = ObjectPath::try_from("/org/mpris/MediaPlayer2/Track/1") {
+                metadata.insert(
+                    "mpris:trackid".to_string(),
+                    zbus::zvariant::Value::new(track_id),
+                );
+            }
+            if let Ok(ps) = self.play_state.lock() {
+                metadata.insert(
+                    "xesam:title".to_string(),
+                    zbus::zvariant::Value::new(ps.title.to_string()),
+                );
+                metadata.insert(
+                    "xesam:artist".to_string(),
+                    zbus::zvariant::Value::Array(zbus::zvariant::Array::from(vec![
+                        ps.author.to_string(),
+                    ])),
+                );
+            }
+            metadata
         }
-        metadata
-    }
 
-    #[zbus(property)]
-    fn volume(&self) -> f64 {
-        1.0
-    }
+        #[zbus(property)]
+        fn volume(&self) -> f64 {
+            1.0
+        }
 
-    #[zbus(property)]
-    fn position(&self) -> i64 {
-        0
-    }
+        #[zbus(property)]
+        fn position(&self) -> i64 {
+            0
+        }
 
-    #[zbus(property)]
-    fn minimum_rate(&self) -> f64 {
-        1.0
-    }
+        #[zbus(property)]
+        fn minimum_rate(&self) -> f64 {
+            1.0
+        }
 
-    #[zbus(property)]
-    fn maximum_rate(&self) -> f64 {
-        1.0
-    }
+        #[zbus(property)]
+        fn maximum_rate(&self) -> f64 {
+            1.0
+        }
 
-    #[zbus(property)]
-    fn can_go_next(&self) -> bool {
-        true
-    }
-
-    #[zbus(property)]
-    fn can_go_previous(&self) -> bool {
-        true
-    }
-
-    #[zbus(property)]
-    fn can_play(&self) -> bool {
-        if let Ok(play_state) = self.play_state.lock() {
-            log!("can_play {}", !play_state.is_playing);
-            !play_state.is_playing
-        } else {
+        #[zbus(property)]
+        fn can_go_next(&self) -> bool {
             true
         }
-    }
 
-    #[zbus(property)]
-    fn can_pause(&self) -> bool {
-        if let Ok(play_state) = self.play_state.lock() {
-            log!("can_pause {}", play_state.is_playing);
-            play_state.is_playing
-        } else {
+        #[zbus(property)]
+        fn can_go_previous(&self) -> bool {
             true
         }
-    }
 
-    #[zbus(property)]
-    fn can_seek(&self) -> bool {
-        false
-    }
+        #[zbus(property)]
+        fn can_play(&self) -> bool {
+            if let Ok(play_state) = self.play_state.lock() {
+                log!("can_play {}", !play_state.is_playing);
+                !play_state.is_playing
+            } else {
+                true
+            }
+        }
 
-    #[zbus(property)]
-    fn can_control(&self) -> bool {
-        true
-    }
+        #[zbus(property)]
+        fn can_pause(&self) -> bool {
+            if let Ok(play_state) = self.play_state.lock() {
+                log!("can_pause {}", play_state.is_playing);
+                play_state.is_playing
+            } else {
+                true
+            }
+        }
 
-    fn next(&self) -> zbus::fdo::Result<()> {
-        log!("[MPRIS] Next pressed");
-        let _ = self.event_sender.send(MediaKeyEvent::Next);
-        Ok(())
-    }
+        #[zbus(property)]
+        fn can_seek(&self) -> bool {
+            false
+        }
 
-    fn previous(&self) -> zbus::fdo::Result<()> {
-        log!("[MPRIS] Previous pressed");
-        let _ = self.event_sender.send(MediaKeyEvent::Previous);
-        Ok(())
-    }
+        #[zbus(property)]
+        fn can_control(&self) -> bool {
+            true
+        }
 
-    fn play_pause(&self) -> zbus::fdo::Result<()> {
-        log!("[MPRIS] PlayPause pressed");
-        let _ = self.event_sender.send(MediaKeyEvent::PlayPause);
-        Ok(())
-    }
+        fn next(&self) -> zbus::fdo::Result<()> {
+            log!("[MPRIS] Next pressed");
+            let _ = self.event_sender.send(MediaKeyEvent::Next);
+            Ok(())
+        }
 
-    fn play(&self) -> zbus::fdo::Result<()> {
-        log!("[MPRIS] Play pressed");
-        let _ = self.event_sender.send(MediaKeyEvent::Play);
-        Ok(())
-    }
+        fn previous(&self) -> zbus::fdo::Result<()> {
+            log!("[MPRIS] Previous pressed");
+            let _ = self.event_sender.send(MediaKeyEvent::Previous);
+            Ok(())
+        }
 
-    fn pause(&self) -> zbus::fdo::Result<()> {
-        log!("[MPRIS] Pause pressed");
-        let _ = self.event_sender.send(MediaKeyEvent::Pause);
-        Ok(())
-    }
+        fn play_pause(&self) -> zbus::fdo::Result<()> {
+            log!("[MPRIS] PlayPause pressed");
+            let _ = self.event_sender.send(MediaKeyEvent::PlayPause);
+            Ok(())
+        }
+
+        fn play(&self) -> zbus::fdo::Result<()> {
+            log!("[MPRIS] Play pressed");
+            let _ = self.event_sender.send(MediaKeyEvent::Play);
+            Ok(())
+        }
+
+        fn pause(&self) -> zbus::fdo::Result<()> {
+            log!("[MPRIS] Pause pressed");
+            let _ = self.event_sender.send(MediaKeyEvent::Pause);
+            Ok(())
+        }
 
         fn stop(&self) -> zbus::fdo::Result<()> {
             let _ = self.event_sender.send(MediaKeyEvent::Stop);
@@ -355,7 +355,7 @@ pub fn start() -> (mpsc::Sender<MediaKeyInfo>, mpsc::Receiver<MediaKeyEvent>) {
             // Try to receive info messages (like play state updates)
             match info_receiver.try_recv() {
                 Ok(MediaKeyInfo::Shutdown) => break,
-                Ok(_) => {}, // Ignore other messages
+                Ok(_) => {} // Ignore other messages
                 Err(_) => {
                     thread::sleep(Duration::from_millis(100));
                 }
