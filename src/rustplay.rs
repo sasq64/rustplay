@@ -125,7 +125,7 @@ impl RustPlay {
 
         let current_list = indexer.get_all_songs();
         let favorites_dir = dirs::home_dir()
-            .expect("User must have a home dir")
+            .expect("User should have a home dir")
             .join(".opfavorites");
 
         Ok(RustPlay {
@@ -286,11 +286,6 @@ impl RustPlay {
         }
 
         if self.state.mode == InputMode::ResultScreen {
-            // let song_list = if self.browsing_favorites {
-            //     &self.favorites
-            // } else {
-            //     &self.result
-            // };
             self.menu_component.draw(&*self.current_selecting)?;
             return Ok(());
         }

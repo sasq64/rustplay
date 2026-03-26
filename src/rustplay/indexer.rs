@@ -13,7 +13,7 @@ use itertools::Itertools;
 use musix::SongInfo;
 use std::ops::Bound;
 use tantivy::collector::TopDocs;
-use tantivy::query::{QueryParser, RangeQuery};
+use tantivy::query::{AllQuery, QueryParser, RangeQuery};
 
 use anyhow::Context;
 use anyhow::Result;
@@ -27,7 +27,7 @@ use walkdir::WalkDir;
 
 use crate::value::Value;
 
-use super::song::{FileInfo, SongCollection};
+use super::song::{FileInfo, FileType, SongCollection};
 
 #[inline]
 /// Convert ISO-8859-1 slice to utf8 String (For text in SID header)
@@ -53,6 +53,7 @@ pub struct SongIndexer {
     title_field: Field,
     composer_field: Field,
     path_field: Field,
+    parent_field: Field,
     index_field: Field,
 
     initial_songs: VecDeque<FileInfo>,
@@ -85,6 +86,7 @@ impl SongIndexer {
         let title_field = schema_builder.add_text_field("title", TEXT | STORED);
         let composer_field = schema_builder.add_text_field("composer", TEXT | STORED);
         let path_field = schema_builder.add_text_field("path", STORED);
+        let parent_field = schema_builder.add_text_field("parent", STORED);
         let index_field = schema_builder.add_u64_field("index", STORED);
         let schema = schema_builder.build();
 
@@ -104,6 +106,7 @@ impl SongIndexer {
             title_field,
             composer_field,
             path_field,
+            parent_field,
             index_field,
             initial_songs: VecDeque::new(),
             count: 0.into(),
@@ -114,13 +117,21 @@ impl SongIndexer {
         let count = self.count.fetch_add(1, Ordering::Relaxed);
         let title = file_info.get_title();
         let composer = file_info.get("composer");
+        let parent = file_info
+            .path
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_str()
+            .context("Illegal parent path")?
+            .to_owned();
 
         self.index_writer.add_document(doc!(
                 self.title_field => title,
                 self.index_field => count as u64,
                 self.composer_field => composer.to_string(),
                 self.path_field => file_info.path.to_str().context("Illegal path")?
-                                    .to_owned()))?;
+                                    .to_owned(),
+                self.parent_field => parent))?;
         if self.initial_songs.len() < INITIAL_SONG_COUNT {
             self.initial_songs.push_back(file_info.clone());
         }
@@ -222,6 +233,7 @@ impl SongIndexer {
         FileInfo {
             path: path.to_owned(),
             meta_data,
+            ..Default::default()
         }
     }
 
@@ -257,6 +269,7 @@ impl SongIndexer {
             result.push(FileInfo {
                 path: path.into(),
                 meta_data,
+                ..Default::default()
             });
         }
         Ok(result)
@@ -291,9 +304,63 @@ impl SongIndexer {
             result.push(FileInfo {
                 path: path.into(),
                 meta_data,
+                ..Default::default()
             });
         }
         Ok(())
+    }
+
+    pub fn browse(&self, dir: &Path) -> Result<Vec<FileInfo>> {
+        let searcher = self.reader.searcher();
+        let top_docs = searcher.search(&AllQuery, &TopDocs::with_limit(1_000_000))?;
+
+        let dir_str = dir.to_str().context("Illegal dir path")?;
+        let mut subdirs: HashSet<PathBuf> = HashSet::new();
+        let mut entries: Vec<FileInfo> = Vec::new();
+
+        for (_score, doc_address) in top_docs {
+            let doc: TantivyDocument = searcher.doc(doc_address)?;
+            let parent = get_string(&doc, self.parent_field)?;
+
+            if parent == dir_str {
+                let path = get_string(&doc, self.path_field)?;
+                let title = get_value(&doc, self.title_field);
+                let composer = get_value(&doc, self.composer_field);
+                let mut meta_data = HashMap::new();
+                if let Some(title) = title {
+                    meta_data.insert("title".to_owned(), title);
+                }
+                if let Some(composer) = composer {
+                    meta_data.insert("composer".to_owned(), composer);
+                }
+                entries.push(FileInfo {
+                    path: path.into(),
+                    meta_data,
+                    ..Default::default()
+                });
+            } else if let Some(rest) = parent.strip_prefix(dir_str) {
+                let rest = rest.trim_start_matches('/');
+                if !rest.is_empty()
+                    && let Some(child) = rest.split('/').next()
+                {
+                    subdirs.insert(dir.join(child));
+                }
+            }
+        }
+
+        let mut dir_entries: Vec<FileInfo> = subdirs
+            .into_iter()
+            .map(|path| FileInfo {
+                path,
+                file_type: FileType::Dir,
+                ..Default::default()
+            })
+            .collect();
+        dir_entries.sort_by(|a, b| a.path.cmp(&b.path));
+        entries.sort_by(|a, b| a.path.cmp(&b.path));
+        dir_entries.append(&mut entries);
+
+        Ok(dir_entries)
     }
 }
 
@@ -444,6 +511,11 @@ impl RemoteSongIndexer {
         Ok(())
     }
 
+    pub fn browse(&self, dir: &Path) -> Result<Vec<FileInfo>> {
+        let indexer = self.lock();
+        indexer.browse(dir)
+    }
+
     pub fn index_count(&self) -> usize {
         let i = self.lock();
         i.count.load(Ordering::Relaxed)
@@ -469,6 +541,7 @@ mod tests {
     use walkdir::WalkDir;
 
     use crate::rustplay::indexer::RemoteSongIndexer;
+    use crate::rustplay::song::{FileInfo, FileType};
 
     use super::SongIndexer;
 
@@ -510,6 +583,46 @@ mod tests {
         assert!(result.len() >= 3);
         let result = indexer.search("xywizoqp").unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn browse_works() {
+        let mut indexer = SongIndexer::new().unwrap();
+        for entry in WalkDir::new("music") {
+            let e = entry.unwrap();
+            if e.path().is_file() {
+                indexer.add_path(e.path()).unwrap();
+            }
+        }
+        indexer.commit().unwrap();
+
+        // Browse root "music" dir
+        let entries = indexer.browse(Path::new("music")).unwrap();
+        let dirs: Vec<&FileInfo> = entries
+            .iter()
+            .filter(|e| e.file_type == FileType::Dir)
+            .collect();
+        let songs: Vec<&FileInfo> = entries
+            .iter()
+            .filter(|e| e.file_type == FileType::Song)
+            .collect();
+        assert!(dirs.iter().any(|d| d.path == PathBuf::from("music/C64")));
+        assert!(dirs.iter().any(|d| d.path == PathBuf::from("music/MODS")));
+        assert!(!songs.is_empty());
+        assert!(songs.iter().all(|s| !s.path().starts_with("music/C64")));
+
+        // Browse music/C64
+        let entries = indexer.browse(Path::new("music/C64")).unwrap();
+        let dirs: Vec<&FileInfo> = entries
+            .iter()
+            .filter(|e| e.file_type == FileType::Dir)
+            .collect();
+        let songs: Vec<&FileInfo> = entries
+            .iter()
+            .filter(|e| e.file_type == FileType::Song)
+            .collect();
+        assert!(dirs.is_empty());
+        assert!(songs.len() > 40);
     }
 
     #[test]

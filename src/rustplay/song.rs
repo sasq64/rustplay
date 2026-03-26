@@ -6,10 +6,18 @@ use std::{
 
 use crate::value::Value;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Default, PartialEq, Debug, Clone, Copy)]
+pub(crate) enum FileType {
+    Dir,
+    #[default]
+    Song,
+}
+
+#[derive(Default, Debug, Clone, PartialEq)]
 pub(crate) struct FileInfo {
     pub path: PathBuf,
     pub meta_data: HashMap<String, Value>,
+    pub file_type: FileType,
 }
 
 impl FileInfo {
