@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
-use std::sync::{Arc, Mutex, MutexGuard, mpsc};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -40,6 +40,9 @@ fn slice_to_string(slice: &[u8]) -> String {
 
 const INITIAL_SONG_COUNT: usize = 100;
 
+static MODLAND_FORMATS: LazyLock<HashSet<&'static str>> =
+    LazyLock::new(|| include_str!("modland_formats.txt").lines().collect());
+
 /// A Tantivy indexer that indexes song files.
 pub struct SongIndexer {
     schema: Schema,
@@ -53,7 +56,6 @@ pub struct SongIndexer {
 
     initial_songs: VecDeque<FileInfo>,
     count: AtomicUsize,
-    modland_formats: HashSet<&'static str>,
 }
 
 fn get_value(doc: &TantivyDocument, field: Field) -> Option<Value> {
@@ -93,8 +95,6 @@ impl SongIndexer {
             .reload_policy(ReloadPolicy::OnCommitWithDelay)
             .try_into()?;
 
-        let modland_formats: HashSet<&str> = include_str!("modland_formats.txt").lines().collect();
-
         Ok(Self {
             schema,
             index,
@@ -106,70 +106,35 @@ impl SongIndexer {
             index_field,
             initial_songs: VecDeque::new(),
             count: 0.into(),
-            modland_formats,
         })
     }
 
-    pub fn add_with_info(&mut self, song_path: &Path, info: &SongInfo) -> Result<()> {
+    pub fn add_song(&mut self, file_info: &FileInfo) -> Result<()> {
         let count = self.count.fetch_add(1, Ordering::Relaxed);
-
-        let file_name = song_path.file_stem().unwrap_or_default().to_string_lossy();
-        let title = if !info.title.is_empty() {
-            if info.game.is_empty() {
-                info.title.clone()
-            } else {
-                format!("{} ({})", info.game, info.title)
-            }
-        } else if !info.game.is_empty() {
-            info.game.clone()
-        } else {
-            file_name.to_string()
-        };
+        let title = file_info.get("title");
+        let composer = file_info.get("composer");
 
         self.index_writer.add_document(doc!(
-                self.title_field => title,
+                self.title_field => title.to_string(),
                 self.index_field => count as u64,
-                self.composer_field => info.composer.clone(),
-                self.path_field => song_path.to_str().context("Illegal path")?
+                self.composer_field => composer.to_string(),
+                self.path_field => file_info.path.to_str().context("Illegal path")?
                                     .to_owned()))?;
         if self.initial_songs.len() < INITIAL_SONG_COUNT {
-            let file_info = FileInfo {
-                path: song_path.into(),
-                meta_data: HashMap::from([
-                    ("title".into(), Value::Text(info.title.clone())),
-                    ("composer".into(), Value::Text(info.composer.clone())),
-                ]),
-            };
-            self.initial_songs.push_back(file_info);
+            self.initial_songs.push_back(file_info.clone());
         }
         Ok(())
     }
 
     pub fn add_path(&mut self, song_path: &Path) -> Result<()> {
-        if let Some(info) = self.parse_modland_info(song_path) {
-            self.add_with_info(song_path, &info)?;
-            return Ok(());
-        }
-
-        let title = song_path.file_stem().unwrap_or_default().to_string_lossy();
-        let count = self.count.fetch_add(1, Ordering::Relaxed);
-        self.index_writer.add_document(doc!(
-                self.title_field =>  title.to_string(),
-                self.index_field => count as u64,
-                self.path_field => song_path.to_string_lossy().to_string()))?;
-        if self.initial_songs.len() < INITIAL_SONG_COUNT {
-            let file_info = FileInfo {
-                path: song_path.into(),
-                meta_data: HashMap::new(),
-            };
-            self.initial_songs.push_back(file_info);
-        }
-        Ok(())
+        // TODO: We can do this less generic but faster, avoiding the hashtable
+        let file_info = SongIndexer::identify_song(song_path);
+        self.add_song(&file_info)
     }
 
     /// If `song_path` looks like a Modland path, parse the information in the
     /// path to a `SongInfo`
-    fn parse_modland_info(&self, song_path: &Path) -> Option<SongInfo> {
+    fn parse_modland_info(song_path: &Path) -> Option<SongInfo> {
         let segments = song_path
             .ancestors()
             .filter_map(|a| a.file_name())
@@ -179,13 +144,13 @@ impl SongIndexer {
         let title = song_path.file_stem().unwrap_or_default().to_string_lossy();
 
         let l = segments.len();
-        if l >= 3 && self.modland_formats.contains(&segments[2]) {
+        if l >= 3 && MODLAND_FORMATS.contains(&segments[2]) {
             return Some(SongInfo {
                 title: title.to_string(),
                 composer: segments[1].to_owned(),
                 ..SongInfo::default()
             });
-        } else if l >= 4 && self.modland_formats.contains(&segments[3]) {
+        } else if l >= 4 && MODLAND_FORMATS.contains(&segments[3]) {
             if segments[1].starts_with("coop-") {
                 let coop = &segments[1][5..];
                 let composer = segments[2].to_owned();
@@ -205,7 +170,7 @@ impl SongIndexer {
         None
     }
 
-    pub fn identify_song(path: &Path) -> Result<Option<SongInfo>> {
+    fn identify_song_internal(path: &Path) -> Result<Option<SongInfo>> {
         if let Some(ext) = path.extension()
             && ext == "sid"
         {
@@ -220,6 +185,43 @@ impl SongIndexer {
             }));
         }
         Ok(musix::identify_song(path))
+    }
+
+    pub fn identify_song(path: &Path) -> FileInfo {
+        let mut meta_data: HashMap<String, Value> = HashMap::new();
+        let info = SongIndexer::parse_modland_info(path)
+            .or_else(|| SongIndexer::identify_song_internal(path).ok().flatten());
+
+        if let Some(info) = info {
+            meta_data.insert("title".into(), info.title.into());
+            meta_data.insert("composer".into(), info.composer.into());
+            meta_data.insert("game".into(), info.game.into());
+            meta_data.insert("format".into(), info.format.into());
+        } else {
+            let title = path
+                .file_stem()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            meta_data.insert("title".into(), title.into());
+        }
+        let meta_path = path.with_extension(format!(
+            "{}.meta",
+            path.extension()
+                .map(|e| e.to_string_lossy())
+                .unwrap_or_default()
+        ));
+        if let Ok(file) = File::open(&meta_path) {
+            for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
+                if let Some((key, value)) = line.split_once('=') {
+                    meta_data.insert(key.to_string(), Value::Text(value.to_string()));
+                }
+            }
+        }
+
+        FileInfo {
+            path: path.to_owned(),
+            meta_data,
+        }
     }
 
     pub fn commit(&mut self) -> Result<()> {
@@ -301,7 +303,7 @@ pub struct IndexedSongs {
 impl SongCollection for IndexedSongs {
     fn get(&self, index: usize) -> FileInfo {
         let mut i = self.indexer.lock().unwrap();
-        i.search_by_index_range(0, 100);
+        let _ = i.search_by_index_range(0, 100);
         i.initial_songs[index].clone()
     }
     fn index_of(&self, song: &FileInfo) -> Option<usize> {
@@ -387,11 +389,8 @@ impl RemoteSongIndexer {
                             }
                         }
                         if p.file_type().is_file() && musix::can_handle(p.path())? {
-                            if let Some(info) = SongIndexer::identify_song(p.path())? {
-                                lock().add_with_info(p.path(), &info)?;
-                            } else {
-                                lock().add_path(p.path())?;
-                            }
+                            let file_info = SongIndexer::identify_song(p.path());
+                            lock().add_song(&file_info)?;
                         }
                         if now.elapsed() > Duration::from_millis(1000) {
                             lock().commit()?;
@@ -464,7 +463,7 @@ impl RemoteSongIndexer {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use walkdir::WalkDir;
 
@@ -474,37 +473,31 @@ mod tests {
 
     #[test]
     fn identify_works() {
-        let path: PathBuf = "../musicplayer/music/C64/Ark_Pandora.sid".into();
-        let info = SongIndexer::identify_song(&path).unwrap().unwrap();
+        let path: PathBuf = "music/C64/Ark_Pandora.sid".into();
+        let info = SongIndexer::identify_song_internal(&path).unwrap().unwrap();
         assert_eq!(info.title, "Ark Pandora");
     }
 
     #[test]
     fn normal_search_works() {
         let mut indexer = SongIndexer::new().unwrap();
-        let path: PathBuf = "../musicplayer/music/C64/Ark_Pandora.sid".into();
-        let info = musix::identify_song(&path).unwrap();
-        indexer.add_with_info(&path, &info).unwrap();
+        let path: PathBuf = "music/C64/Ark_Pandora.sid".into();
+        indexer.add_path(&path).unwrap();
         indexer.commit().unwrap();
         let result = indexer.search("pandora").unwrap();
         assert!(result.len() == 1);
 
-        let path: PathBuf =
-            "/home/sasq/Music/MODLAND/Fasttracker 2/Purple Motion/sil forever.xm".into();
+        let path: PathBuf = "/MODLAND/Fasttracker 2/Purple Motion/sil forever.xm".into();
         indexer.add_path(&path).unwrap();
         indexer.commit().unwrap();
         let result = indexer.search("purple motion").unwrap();
         assert_eq!(result.len(), 1);
 
-        let path: PathBuf = "../musicplayer/music".into();
+        let path: PathBuf = "music".into();
         for entry in WalkDir::new(path) {
             let e = entry.unwrap();
             if e.path().is_file() {
-                if let Some(info) = musix::identify_song(e.path()) {
-                    indexer.add_with_info(e.path(), &info).unwrap();
-                } else {
-                    indexer.add_path(e.path()).unwrap();
-                }
+                indexer.add_path(e.path()).unwrap();
             }
         }
         indexer.commit().unwrap();
@@ -520,8 +513,11 @@ mod tests {
 
     #[test]
     fn threaded_search_works() {
+        let data = Path::new("data");
+        assert!(data.is_dir());
+        musix::init(data).unwrap();
         let mut indexer = RemoteSongIndexer::new().unwrap();
-        let path: PathBuf = "../musicplayer/music".into();
+        let path: PathBuf = "music".into();
         indexer.add_path(&path).unwrap();
         while indexer.working() {
             std::thread::sleep(std::time::Duration::from_millis(50));
