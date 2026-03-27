@@ -10,6 +10,11 @@ pub enum InputMode {
     ResultScreen,
 }
 
+pub(crate) enum Msg {
+    Err(String),
+    Info(String),
+}
+
 #[derive(Default)]
 pub struct State {
     pub changed: bool,
@@ -23,13 +28,21 @@ pub struct State {
     pub last_mode: InputMode,
     pub quit: bool,
     pub use_color: bool,
-    pub errors: VecDeque<String>,
+    pub messages: VecDeque<Msg>,
     pub player_started: bool,
     pub width: i32,
     pub height: i32,
 }
 
 impl State {
+    pub fn info(&mut self, text: impl Into<String>) {
+        self.messages.push_back(Msg::Info(text.into()));
+    }
+
+    pub fn error(&mut self, text: impl Into<String>) {
+        self.messages.push_back(Msg::Err(text.into()));
+    }
+
     pub fn update_meta(&mut self, meta: &str, val: Value) {
         match val {
             Value::Number(n) => {
@@ -62,7 +75,7 @@ impl State {
                 self.changed = true;
             }
             Value::Error(ref e) => {
-                self.errors.push_back((*e).to_string());
+                self.messages.push_back(Msg::Err((*e).to_string()));
             }
             Value::State(_) | Value::Data(_) | Value::Unknown => {}
         }

@@ -18,6 +18,7 @@ pub enum KeyReturn {
     PlaySong(FileInfo),
     Search(String),
     ExitMenu,
+    Up,
     Navigate,
 }
 
@@ -31,9 +32,16 @@ pub struct SongMenu {
     pub use_color: bool,
     scrolled: bool,
     moved: bool,
+    pub left: String,
+    pub right: String,
 }
 
 impl SongMenu {
+    pub fn set_title(&mut self, left: impl Into<String>, right: impl Into<String>) {
+        self.left = left.into();
+        self.right = right.into();
+    }
+
     fn fade(&self, i: usize) -> Color {
         let x: u8 = (155 + self.fader[i] * 10) as u8;
         Color::Rgb { r: x, g: x, b: x }
@@ -44,10 +52,28 @@ impl SongMenu {
             self.fader.resize(self.height, 0);
         }
         let mut out = stdout();
+
+        let black = Color::Rgb { r: 0, g: 0, b: 0 };
+        let white = Color::Rgb {
+            r: 255,
+            g: 255,
+            b: 255,
+        };
+
         if self.scrolled {
             out.queue(Clear(ClearType::All))?;
         }
-        out.queue(cursor::MoveTo(0, 0))?;
+        out.queue(cursor::MoveTo(0, 0))?
+            .queue(SetForegroundColor(white))?
+            .queue(SetBackgroundColor(Color::DarkRed))?
+            .queue(Print(format!(
+                "{}{:>width$}",
+                &self.left,
+                &self.right,
+                width = self.width - self.left.len()
+            )))?;
+        out.queue(cursor::MoveTo(0, 1))?
+            .queue(SetBackgroundColor(black))?;
         let start = self.start_pos;
         let end = (start + self.height).clamp(start, song_list.len());
         let songs = &song_list.get_range(start, end);
@@ -87,7 +113,7 @@ impl SongMenu {
     pub fn new(use_color: bool, width: usize, height: usize) -> Self {
         SongMenu {
             width,
-            height,
+            height: height - 1,
             use_color,
             scrolled: true,
             ..SongMenu::default()
@@ -96,7 +122,7 @@ impl SongMenu {
 
     pub fn resize(&mut self, width: usize, height: usize) {
         self.width = width;
-        self.height = height;
+        self.height = height - 1;
         self.scrolled = true;
     }
 
@@ -114,6 +140,7 @@ impl SongMenu {
         let old_selected = self.selected;
         match key.code {
             KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
+            KeyCode::Char('/') => return Ok(KeyReturn::Up),
             KeyCode::Char(_) => return Ok(KeyReturn::Navigate),
             KeyCode::Up => {
                 if self.selected > 0 {

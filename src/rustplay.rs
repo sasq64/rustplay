@@ -3,6 +3,7 @@ use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
 use musix::MusicError;
 use scripting::Scripting;
+use std::collections::HashSet;
 use std::fmt::Display;
 use std::io::{self, Write as _, stdout};
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use crate::VisualizerPos;
 use crate::media_keys::{self, MediaKeyEvent, MediaKeyInfo};
 use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
 use crate::rustplay::indexer::SongIndexer;
+use crate::rustplay::state::Msg;
 use crate::templ::Template;
 use crate::utils::{extract_zip, make_color};
 use crate::value::Value;
@@ -35,7 +37,7 @@ mod state;
 
 use crate::term_extra::{MaybeCommand, SetReverse};
 
-use song::{FileInfo, SongArray, SongCollection};
+use song::{FileInfo, FileType, SongArray, SongCollection};
 
 use indexer::RemoteSongIndexer;
 use state::{InputMode, State};
@@ -64,6 +66,10 @@ pub struct RustPlay {
     search_result: Rc<dyn SongCollection>,
     favorites_dir: PathBuf,
     favorites: Rc<dyn SongCollection>,
+    start_dir: PathBuf,
+    current_dir: PathBuf,
+    dir_listing: Rc<dyn SongCollection>,
+    query: String,
 }
 impl RustPlay {
     /// Create a new instance of `RustPlay` using parsed command line arguments in `args`.
@@ -112,6 +118,9 @@ impl RustPlay {
 
         let indexer = RemoteSongIndexer::new()?;
 
+        let home_dir = dirs::home_dir().expect("User should have a home dir");
+        let mut start_dir = home_dir.clone();
+
         if args.songs.is_empty() {
             let test_song: PathBuf = "music.mod".into();
             if test_song.is_file() {
@@ -119,14 +128,17 @@ impl RustPlay {
             }
         } else {
             for song in &args.songs {
+                if song.is_file() {
+                    start_dir = song.parent().unwrap().into();
+                } else {
+                    start_dir = song.into();
+                }
                 indexer.add_path(song)?;
             }
         }
 
         let current_list = indexer.get_all_songs();
-        let favorites_dir = dirs::home_dir()
-            .expect("User should have a home dir")
-            .join(".opfavorites");
+        let favorites_dir = home_dir.join(".opfavorites");
 
         Ok(RustPlay {
             cmd_producer,
@@ -169,7 +181,10 @@ impl RustPlay {
             search_result: Rc::new(SongArray::default()),
             favorites_dir,
             favorites: Rc::new(SongArray::default()),
-            //browsing_favorites: false,
+            current_dir: start_dir.clone(),
+            start_dir,
+            dir_listing: Rc::new(SongArray::default()),
+            query: String::new(),
         })
     }
     fn setup_term() -> io::Result<()> {
@@ -309,6 +324,12 @@ impl RustPlay {
                 .flush()?;
         }
 
+        let play_time = self.msec.load(Ordering::SeqCst);
+        let c = (play_time / 10) % 100;
+        let m = play_time / 60000;
+        let s = (play_time / 1000) % 60;
+        self.write_field("time", format!("{m:02}:{s:02}:{c:02}"))?;
+
         if self.fft_pos != VisualizerPos::None {
             if let Some(Value::Data(data)) = self.state.meta.get("fft") {
                 self.fft_component.update(data);
@@ -318,19 +339,25 @@ impl RustPlay {
 
         if self.state.show_error > 0 {
             self.state.show_error -= 1;
-            let err: &str = self.state.errors.front().map_or("", |s| s.as_str());
-            let x = self.state.width - err.len() as i32 - 2;
+            let Some(err) = self.state.messages.front() else {
+                return Ok(());
+            };
+            let (text, color) = match err {
+                Msg::Err(t) => (t, Color::Red),
+                Msg::Info(t) => (t, Color::Yellow),
+            };
+            let x = self.state.width - text.len() as i32 - 2;
             let y = self.state.height - 1;
 
             out.queue(cursor::MoveTo(x as u16, y as u16))?
-                .queue(self.fg_color(Color::Red))?
-                .queue(Print(err))?;
+                .queue(self.fg_color(color))?
+                .queue(Print(text))?;
             if self.state.show_error == 0 {
-                self.state.errors.pop_front();
+                self.state.messages.pop_front();
                 self.state.changed = true;
             }
-        } else if !self.state.errors.is_empty() {
-            let l = self.state.errors.len();
+        } else if !self.state.messages.is_empty() {
+            let l = self.state.messages.len();
             self.state.show_error = match l {
                 5.. => 1,
                 2..5 => 10,
@@ -339,11 +366,6 @@ impl RustPlay {
             log!("Error for {} frames", self.state.show_error);
         }
 
-        let play_time = self.msec.load(Ordering::SeqCst);
-        let c = (play_time / 10) % 100;
-        let m = play_time / 60000;
-        let s = (play_time / 1000) % 60;
-        self.write_field("time", format!("{m:02}:{s:02}:{c:02}"))?;
         out.flush()?;
         Ok(())
     }
@@ -357,6 +379,7 @@ impl RustPlay {
     }
 
     fn search(&mut self, query: &str) -> Result<()> {
+        self.query = query.into();
         log!("Searching for {}", query);
         self.search_result = Rc::new(SongArray {
             songs: self.indexer.search(query)?,
@@ -382,6 +405,30 @@ impl RustPlay {
 
     pub fn play_pause(&mut self) {
         self.send_cmd(Player::play_pause);
+    }
+
+    fn goto_search(&mut self) {
+        self.current_selecting = self.search_result.clone();
+        self.state.mode = InputMode::ResultScreen;
+        self.menu_component.start_pos = 0;
+        self.menu_component.selected = 0;
+    }
+
+    fn goto_dir(&mut self) -> Result<()> {
+        let songs = self.indexer.browse(&self.current_dir)?;
+        self.dir_listing = Rc::new(SongArray { songs });
+        self.current_selecting = self.dir_listing.clone();
+        self.state.mode = InputMode::ResultScreen;
+        self.menu_component.start_pos = 0;
+        self.menu_component.selected = 0;
+        let name = self
+            .current_dir
+            .strip_prefix(&self.start_dir)?
+            .to_string_lossy();
+        self.menu_component.left = format!("\"{}\"", name);
+        self.menu_component.right = "[/] = Parent".into();
+        self.menu_component.refresh();
+        Ok(())
     }
 
     pub fn handle_keys(&mut self) -> Result<bool> {
@@ -426,20 +473,28 @@ impl RustPlay {
                                     self.load_favorites();
                                     if !self.favorites.is_empty() {
                                         self.current_selecting = self.favorites.clone();
+                                        self.menu_component.set_title("Favorites", "");
                                         self.state.mode = InputMode::ResultScreen;
                                         self.menu_component.start_pos = 0;
                                         self.menu_component.selected = 0;
                                     } else {
-                                        self.state.errors.push_back("No favorites yet".into());
+                                        self.state
+                                            .messages
+                                            .push_back(Msg::Err("No favorites yet".into()));
                                     }
                                 }
                                 KeyCode::Char('S') => {
                                     self.current_selecting = self.search_result.clone();
                                     if !self.current_selecting.is_empty() {
+                                        self.menu_component
+                                            .set_title(format!("Search: \"{}\"", self.query), "");
                                         self.state.mode = InputMode::ResultScreen;
                                         self.menu_component
                                             .handle_key(&*self.current_selecting, key)?;
                                     }
+                                }
+                                KeyCode::Char('d') => {
+                                    self.goto_dir()?;
                                 }
                                 KeyCode::Right => self.send_cmd(Player::next_song),
                                 KeyCode::Left => self.send_cmd(Player::prev_song),
@@ -460,13 +515,26 @@ impl RustPlay {
                                 .menu_component
                                 .handle_key(&*self.current_selecting, key)?
                             {
+                                KeyReturn::Up => {
+                                    if self.current_dir != self.start_dir
+                                        && let Some(parent) = self.current_dir.parent()
+                                    {
+                                        self.current_dir = parent.into();
+                                        self.goto_dir()?;
+                                    }
+                                }
                                 KeyReturn::PlaySong(song) => {
-                                    self.current_playing = self.current_selecting.clone();
-                                    self.current_song =
-                                        self.current_playing.index_of(&song).unwrap_or(0);
-                                    self.play_song(&song);
-                                    self.state.changed = true;
-                                    self.state.mode = InputMode::Main;
+                                    if song.file_type == FileType::Dir {
+                                        self.current_dir = self.current_dir.join(song.path);
+                                        self.goto_dir()?;
+                                    } else {
+                                        self.current_playing = self.current_selecting.clone();
+                                        self.current_song =
+                                            self.current_playing.index_of(&song).unwrap_or(0);
+                                        self.play_song(&song);
+                                        self.state.changed = true;
+                                        self.state.mode = InputMode::Main;
+                                    }
                                 }
                                 KeyReturn::ExitMenu => {
                                     self.state.changed = true;
@@ -484,6 +552,8 @@ impl RustPlay {
                             match self.search_component.handle_key(key)? {
                                 KeyReturn::Search(query) => {
                                     self.search(&query)?;
+                                    self.menu_component
+                                        .set_title(format!("Search: \"{}\"", self.query), "");
                                     if !self.search_result.is_empty() {
                                         self.current_selecting = self.search_result.clone();
                                         self.state.mode = InputMode::ResultScreen;
@@ -492,8 +562,8 @@ impl RustPlay {
                                     } else {
                                         log!("Pushing error");
                                         self.state
-                                            .errors
-                                            .push_back("No results from search".into());
+                                            .messages
+                                            .push_back(Msg::Err("No results from search".into()));
                                     }
                                 }
                                 KeyReturn::ExitMenu => {
@@ -636,6 +706,7 @@ impl RustPlay {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_file() && path.extension().map(|e| e != "meta").unwrap_or(true) {
+                    log!("{path:?}");
                     let file_info = SongIndexer::identify_song(&path);
                     songs.push(file_info);
                 }
@@ -655,14 +726,16 @@ impl RustPlay {
         };
         if let Err(e) = fs::create_dir_all(&self.favorites_dir) {
             self.state
-                .errors
-                .push_back(format!("Can't create favorites dir: {e}"));
+                .messages
+                .push_back(Msg::Err(format!("Can't create favorites dir: {e}")));
             return;
         }
+        let skip_tags: HashSet<&str> =
+            ["startSong", "new", "isong", "next_song", "file_name"].into();
         let dest = self.favorites_dir.join(file_name);
         match fs::copy(src, &dest) {
             Ok(_) => {
-                self.state.errors.push_back("Added to favorites".into());
+                self.state.info("Added to favorites");
                 let meta_path = dest.with_extension(format!(
                     "{}.meta",
                     dest.extension()
@@ -670,9 +743,12 @@ impl RustPlay {
                         .unwrap_or_default()
                 ));
                 let mut lines = String::new();
-                for (key, value) in &song.meta_data {
+                for (key, value) in &self.state.meta {
+                    if skip_tags.contains(key.as_str()) {
+                        continue;
+                    }
                     match value {
-                        Value::Text(s) => lines.push_str(&format!("{key}={s}\n")),
+                        Value::Text(s) if !s.is_empty() => lines.push_str(&format!("{key}={s}\n")),
                         Value::Number(n) => lines.push_str(&format!("{key}={n}\n")),
                         _ => {}
                     }
@@ -681,7 +757,7 @@ impl RustPlay {
                     let _ = fs::write(&meta_path, &lines);
                 }
             }
-            Err(e) => self.state.errors.push_back(format!("Failed to copy: {e}")),
+            Err(e) => self.state.error(format!("Failed to copy: {e}")),
         }
     }
 
