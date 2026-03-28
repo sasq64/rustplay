@@ -66,8 +66,9 @@ pub struct SongIndexer {
 
 fn get_value(doc: &TantivyDocument, field: Field) -> Option<Value> {
     if let Some(path_val) = doc.get_first(field) {
-        return match path_val {
-            OwnedValue::Str(name) => Some(Value::Text(name.to_owned())),
+        let owned: OwnedValue = path_val.into();
+        return match owned {
+            OwnedValue::Str(name) => Some(Value::Text(name)),
             _ => None,
         };
     }
@@ -76,8 +77,9 @@ fn get_value(doc: &TantivyDocument, field: Field) -> Option<Value> {
 
 fn get_string(doc: &TantivyDocument, field: Field) -> Result<String> {
     if let Some(path_val) = doc.get_first(field) {
-        return match path_val {
-            OwnedValue::Str(name) => Ok(name.to_owned()),
+        let owned: OwnedValue = path_val.into();
+        return match owned {
+            OwnedValue::Str(name) => Ok(name),
             _ => Err(anyhow!("")),
         };
     }
@@ -313,13 +315,9 @@ impl SongIndexer {
 
     pub fn search_by_index_range(&mut self, start: u64, end: u64) -> Result<()> {
         let searcher = self.reader.searcher();
-        let field_name = self
-            .schema
-            .get_field_entry(self.index_field)
-            .name()
-            .to_string();
-        let query =
-            RangeQuery::new_u64_bounds(field_name, Bound::Included(start), Bound::Included(end));
+        let lower = Term::from_field_u64(self.index_field, start);
+        let upper = Term::from_field_u64(self.index_field, end);
+        let query = RangeQuery::new(Bound::Included(lower), Bound::Included(upper));
         let top_docs = searcher.search(&query, &TopDocs::with_limit(100_000))?;
 
         let mut result = Vec::new();

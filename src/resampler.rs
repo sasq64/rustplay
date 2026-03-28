@@ -1,10 +1,10 @@
 use anyhow::Result;
-use itertools::Itertools;
-use rubato::{SincFixedIn, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+use audioadapter_buffers::direct::InterleavedSlice;
+use rubato::{Async, FixedAsync, SincInterpolationParameters, SincInterpolationType, WindowFunction};
 
 #[allow(clippy::struct_field_names)]
 pub struct Resampler {
-    resampler: SincFixedIn<f32>,
+    resampler: Async<f32>,
     wave_out: Vec<f32>,
     samples_out: Vec<f32>,
     buffer_size: usize,
@@ -21,7 +21,8 @@ impl Resampler {
             oversampling_factor: 256,
             window: WindowFunction::BlackmanHarris2,
         };
-        let resampler = SincFixedIn::<f32>::new(1.0, 4.0, params, buffer_size, 2)?;
+        let resampler =
+            Async::<f32>::new_sinc(1.0, 4.0, &params, buffer_size, 2, FixedAsync::Input)?;
         let wave_out: Vec<f32> = vec![0.0; buffer_size * 6];
         let samples_out: Vec<f32> = vec![0.0; buffer_size * 6];
         Ok(Resampler {
@@ -45,20 +46,16 @@ impl Resampler {
         use rubato::Resampler;
 
         if self.enabled {
-            let left = samples.iter().copied().step_by(2).collect_vec();
-            let right = samples.iter().copied().skip(1).step_by(2).collect_vec();
-            let input = vec![left, right];
-            let (out_left, out_right) = self.wave_out.split_at_mut(self.buffer_size * 3);
-            let mut output = vec![out_left, out_right];
+            let frames = samples.len() / 2;
+            let input = InterleavedSlice::new(samples, 2, frames)?;
+            let max_out = self.resampler.output_frames_max();
+            self.wave_out.resize(max_out * 2, 0.0);
+            let mut output = InterleavedSlice::new_mut(&mut self.wave_out, 2, max_out)?;
             let (_rcount, wcount) =
                 self.resampler
                     .process_into_buffer(&input, &mut output, None)?;
-            let (left, right) = self.wave_out.split_at(self.buffer_size * 3);
             self.samples_out.resize(wcount * 2, 0.0);
-            for (i, (&l, &r)) in left.iter().zip(right.iter()).take(wcount).enumerate() {
-                self.samples_out[i * 2] = l;
-                self.samples_out[i * 2 + 1] = r;
-            }
+            self.samples_out.copy_from_slice(&self.wave_out[..wcount * 2]);
             return Ok(&self.samples_out);
         }
         Ok(samples)

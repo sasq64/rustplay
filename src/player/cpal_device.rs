@@ -1,9 +1,9 @@
-use std::thread;
-use std::time::Duration;
 use anyhow::{Context, Result};
 use cpal::traits::*;
+use std::thread;
+use std::time::Duration;
 
-use super::audio_device::{AudioDevice, AudioCallback};
+use super::audio_device::{AudioCallback, AudioDevice};
 
 pub(crate) struct NoSoundDevice {}
 
@@ -86,12 +86,12 @@ pub(crate) fn setup_audio_device() -> Result<Box<dyn AudioDevice>> {
         .find(|conf| {
             conf.channels() == 2
                 && conf.sample_format() == cpal::SampleFormat::F32
-                && conf.max_sample_rate() >= cpal::SampleRate(PLAYBACK_FREQ_HZ)
-                && conf.min_sample_rate() <= cpal::SampleRate(PLAYBACK_FREQ_HZ)
+                && conf.max_sample_rate() >= PLAYBACK_FREQ_HZ
+                && conf.min_sample_rate() <= PLAYBACK_FREQ_HZ
         })
         .context("Could not find a compatible audio config")?;
 
-    let config = sconf.with_sample_rate(cpal::SampleRate(PLAYBACK_FREQ_HZ));
+    let config = sconf.with_sample_rate(PLAYBACK_FREQ_HZ);
 
     Ok(Box::new(CPalDevice {
         device,

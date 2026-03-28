@@ -730,8 +730,16 @@ impl RustPlay {
                 .push_back(Msg::Err(format!("Can't create favorites dir: {e}")));
             return;
         }
-        let skip_tags: HashSet<&str> =
-            ["startSong", "new", "isong", "next_song", "file_name"].into();
+        let skip_tags: HashSet<&str> = [
+            "messages",
+            "startSong",
+            "len",
+            "new",
+            "isong",
+            "next_song",
+            "file_name",
+        ]
+        .into();
         let dest = self.favorites_dir.join(file_name);
         match fs::copy(src, &dest) {
             Ok(_) => {
