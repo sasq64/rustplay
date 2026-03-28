@@ -19,17 +19,22 @@
 - [x] Play/Pause
 - [ ] Size meta data
 - [ ] Max errors, and show filename
-- [ ] Favorites play list
+- [x] Favorites play list
 - [ ] Goto author
 - [ ] Goto directory
 
 ### ISSUES
 
 - [ ] No FFT when sample data is non-power-of-two
-- [ ] FFT delay for bluetooth
+- [x] FFT delay for bluetooth
 - [ ] Song count 0/empty
 - [x] Use 'zip' directly
 - [x] Open Startrekker with UADE
+- [ ] Go to parent dir should select previous
+- [ ] Separate menu state for all menues
+- [ ] No MP3 song length
+- [ ] Color of time elapsed
+
 
 ### VISUAL IMPROVEMENTS
 
