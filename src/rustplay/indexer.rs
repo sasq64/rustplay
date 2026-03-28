@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
+use id3::{Tag, TagLike};
 use itertools::Itertools;
 use musix::SongInfo;
 use std::ops::Bound;
@@ -200,18 +201,31 @@ impl SongIndexer {
     }
 
     fn identify_song_internal(path: &Path) -> Result<Option<SongInfo>> {
-        if let Some(ext) = path.extension()
-            && ext == "sid"
-        {
-            let mut buf: [u8; 0x60] = [0; 0x60];
-            File::open(path)?.read_exact(&mut buf)?;
-            let title = slice_to_string(&buf[0x16..0x36]);
-            let composer = slice_to_string(&buf[0x36..0x56]);
-            return Ok(Some(SongInfo {
-                title,
-                composer,
-                ..SongInfo::default()
-            }));
+        if let Some(ext) = path.extension() {
+            if ext == "sid" {
+                let mut buf: [u8; 0x60] = [0; 0x60];
+                File::open(path)?.read_exact(&mut buf)?;
+                let title = slice_to_string(&buf[0x16..0x36]);
+                let composer = slice_to_string(&buf[0x36..0x56]);
+                return Ok(Some(SongInfo {
+                    title,
+                    composer,
+                    ..SongInfo::default()
+                }));
+            } else if ext == "mp3" {
+                let tag = Tag::read_from_path(path)?;
+                let mut info = SongInfo {
+                    format: "MP3".into(),
+                    ..SongInfo::default()
+                };
+                if let Some(artist) = tag.artist() {
+                    info.composer = artist.into();
+                }
+                if let Some(title) = tag.title() {
+                    info.title = title.into();
+                }
+                return Ok(Some(info));
+            }
         }
         let res = musix::identify_song(path);
         {
