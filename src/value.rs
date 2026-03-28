@@ -1,5 +1,6 @@
 use core::fmt;
 use std::fmt::Display;
+use std::time::Instant;
 
 use musix::MusicError;
 
@@ -12,6 +13,7 @@ pub(crate) enum Value {
     Data(Vec<u8>),
     Error(MusicError),
     State(PlayState),
+    Instant(Instant),
     #[default]
     Unknown,
 }
@@ -23,6 +25,7 @@ impl Display for Value {
             Value::Number(n) => write!(f, "{n:02}")?,
             Value::Error(e) => write!(f, "{e}")?,
             Value::Data(_) => write!(f, "Data")?,
+            Value::Instant(i) => write!(f, "{i:?}")?,
             Value::Unknown => write!(f, "???")?,
             Value::State(ps) => write!(f, "{ps:?}")?,
         }

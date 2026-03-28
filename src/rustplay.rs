@@ -3,13 +3,14 @@ use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
 use musix::MusicError;
 use scripting::Scripting;
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::{self, Write as _, stdout};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, mpsc};
+use std::time::Instant;
 use std::{fs, panic, thread::JoinHandle};
 
 use crate::VisualizerPos;
@@ -57,6 +58,7 @@ pub struct RustPlay {
     menu_component: gui::SongMenu,
     search_component: gui::SearchField,
     fft_component: gui::Fft,
+    fft_queue: VecDeque<(Instant, Vec<u8>)>,
     current_playing: Rc<dyn SongCollection>,
     current_selecting: Rc<dyn SongCollection>,
     current_song: usize,
@@ -139,6 +141,7 @@ impl RustPlay {
 
         let current_list = indexer.get_all_songs();
         let favorites_dir = home_dir.join(".opfavorites");
+        let audio_delay_us = Arc::new(AtomicUsize::new(0));
 
         Ok(RustPlay {
             cmd_producer,
@@ -150,6 +153,7 @@ impl RustPlay {
                 info_producer,
                 cmd_consumer,
                 msec,
+                audio_delay_us,
                 crate::player::CpalBackend,
             )?),
             fft_pos: args.visualizer,
@@ -172,6 +176,7 @@ impl RustPlay {
                 y,
                 height: args.visualizer_height as i32,
             },
+            fft_queue: VecDeque::new(),
             current_playing: current_list.clone(),
             current_selecting: Rc::new(SongArray::default()),
             current_song: 0,
@@ -331,8 +336,15 @@ impl RustPlay {
         self.write_field("time", format!("{m:02}:{s:02}:{c:02}"))?;
 
         if self.fft_pos != VisualizerPos::None {
-            if let Some(Value::Data(data)) = self.state.meta.get("fft") {
-                self.fft_component.update(data);
+            // Pop delayed FFT frames whose display time has arrived
+            let now = Instant::now();
+            while let Some((display_at, _)) = self.fft_queue.front() {
+                if *display_at <= now {
+                    let (_, data) = self.fft_queue.pop_front().unwrap();
+                    self.fft_component.update(&data);
+                } else {
+                    break;
+                }
             }
             self.fft_component.draw()?;
         }
@@ -647,9 +659,24 @@ impl RustPlay {
             self.next();
             self.state.done = false;
         }
+        let mut next_fft_at = None;
         while let Ok((meta, val)) = self.info_consumer.try_recv() {
-            if meta != "fft" {
+            if meta != "fft" && meta != "fft_at" {
                 log!("SONG-META {} = {}", meta, val);
+            }
+            // Buffer FFT data with display timestamp for audio-sync
+            if meta == "fft_at"
+                && let Value::Instant(at) = val
+            {
+                next_fft_at = Some(at);
+                continue;
+            }
+            if meta == "fft"
+                && let Value::Data(data) = val
+            {
+                let display_at = next_fft_at.take().unwrap_or_else(Instant::now);
+                self.fft_queue.push_back((display_at, data));
+                continue;
             }
             if meta == "state"
                 && let Value::State(n) = val

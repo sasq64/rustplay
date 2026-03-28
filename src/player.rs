@@ -8,7 +8,7 @@ use std::{
         mpsc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use fft::Fft;
@@ -54,7 +54,7 @@ impl NoSoundDevice {
 }
 
 impl AudioDevice for NoSoundDevice {
-    fn play(&mut self, _callback: AudioCallback) -> Result<()> {
+    fn play(&mut self, _callback: AudioCallback, _device_latency_us: Arc<AtomicUsize>) -> Result<()> {
         // No-op: don't actually play audio
         Ok(())
     }
@@ -268,6 +268,7 @@ fn run_audio_loop<B: AudioBackend>(
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
+    audio_delay_us: Arc<AtomicUsize>,
     backend: B,
 ) -> Result<()> {
     let mut audio_device = backend.setup_audio_device()?;
@@ -281,6 +282,8 @@ fn run_audio_loop<B: AudioBackend>(
     let mut resampler = Resampler::new(buffer_size / 2)?;
     let mut plugin_freq = playback_freq;
 
+    let device_latency_us = Arc::new(AtomicUsize::new(0));
+
     audio_device.play(Box::new(move |data: &mut [f32]| {
         if audio_faucet.pop_slice(data) > 0 {
             let ms = data.len() * 1000 / (playback_freq as usize * 2);
@@ -288,7 +291,7 @@ fn run_audio_loop<B: AudioBackend>(
         } else {
             data.fill(0.0);
         }
-    }))?;
+    }), device_latency_us.clone())?;
 
     let mut target: Vec<i16> = vec![0; buffer_size];
     let mut player = Player {
@@ -356,6 +359,14 @@ fn run_audio_loop<B: AudioBackend>(
                 // Run FFT analysis on full buffers
                 if rc == target.len() {
                     let data = fft.run(&samples, playback_freq)?;
+                    // Compute total audio delay: ring buffer + device latency
+                    let ring_delay_us = audio_sink.occupied_len() as u64 * 1_000_000
+                        / (playback_freq as u64 * 2);
+                    let dev_delay_us = device_latency_us.load(Ordering::Relaxed) as u64;
+                    let total_delay_us = ring_delay_us + dev_delay_us;
+                    audio_delay_us.store(total_delay_us as usize, Ordering::Relaxed);
+                    let display_at = Instant::now() + Duration::from_micros(total_delay_us);
+                    info_producer.send(("fft_at".to_owned(), Value::Instant(display_at)))?;
                     info_producer.push_value("fft", data)?;
                 }
             } else {
@@ -375,6 +386,7 @@ pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
     info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
+    audio_delay_us: Arc<AtomicUsize>,
     backend: B,
 ) -> Result<JoinHandle<()>> {
     let fft = Fft {
@@ -386,8 +398,9 @@ pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
     let info_producer_error = info_producer.clone();
 
     Ok(thread::spawn(move || {
-        let main =
-            || -> Result<()> { run_audio_loop(fft, info_producer, cmd_consumer, msec, backend) };
+        let main = || -> Result<()> {
+            run_audio_loop(fft, info_producer, cmd_consumer, msec, audio_delay_us, backend)
+        };
         if let Err(e) = main() {
             // Try to send error info back to main thread before terminating
             let _ = info_producer_error.send((
@@ -435,12 +448,13 @@ mod tests {
         // Receive info from player
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
+        let audio_delay_us = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
         let data = Path::new("data");
         musix::init(data).unwrap();
         let backend = super::NoSoundBackend {};
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, audio_delay_us, backend).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
         let (key, _) = info_consumer.recv().unwrap();
@@ -455,11 +469,12 @@ mod tests {
         // Receive info from player
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
+        let audio_delay_us = Arc::new(AtomicUsize::new(0));
         let args = Args { ..Args::default() };
         musix::init(Path::new("data")).unwrap();
         let backend = super::NoSoundBackend {};
         let player_thread =
-            crate::player::run_player(&args, info_producer, cmd_consumer, msec, backend).unwrap();
+            crate::player::run_player(&args, info_producer, cmd_consumer, msec, audio_delay_us, backend).unwrap();
 
         cmd_producer.send(Box::new(move |p| p.next_song())).unwrap();
         let (_, val) = info_consumer.recv().unwrap();

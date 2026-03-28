@@ -77,7 +77,7 @@ impl State {
             Value::Error(ref e) => {
                 self.messages.push_back(Msg::Err((*e).to_string()));
             }
-            Value::State(_) | Value::Data(_) | Value::Unknown => {}
+            Value::State(_) | Value::Data(_) | Value::Instant(_) | Value::Unknown => {}
         }
 
         self.meta.insert(meta.to_owned(), val);

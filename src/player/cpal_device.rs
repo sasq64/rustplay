@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
 use cpal::traits::*;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -16,7 +18,7 @@ pub(crate) struct CPalDevice {
 }
 
 impl AudioDevice for NoSoundDevice {
-    fn play(&mut self, mut callback: AudioCallback) -> Result<()> {
+    fn play(&mut self, mut callback: AudioCallback, _device_latency_us: Arc<AtomicUsize>) -> Result<()> {
         let buffer_size = self.get_buffer_size();
         let playback_freq = self.get_playback_freq();
 
@@ -47,11 +49,18 @@ impl AudioDevice for NoSoundDevice {
 }
 
 impl AudioDevice for CPalDevice {
-    fn play(&mut self, mut callback: AudioCallback) -> Result<()> {
+    fn play(&mut self, mut callback: AudioCallback, device_latency_us: Arc<AtomicUsize>) -> Result<()> {
         let stream = self.device.build_output_stream(
             &self.config,
-            move |data: &mut [f32], _info: &cpal::OutputCallbackInfo| {
+            move |data: &mut [f32], info: &cpal::OutputCallbackInfo| {
                 callback(data);
+                if let Some(latency) = info
+                    .timestamp()
+                    .playback
+                    .duration_since(&info.timestamp().callback)
+                {
+                    device_latency_us.store(latency.as_micros() as usize, Ordering::Relaxed);
+                }
             },
             |err| eprintln!("An error occurred on stream: {err}"),
             None,
