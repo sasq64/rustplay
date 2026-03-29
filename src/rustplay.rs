@@ -2,7 +2,7 @@ use anyhow::Result;
 use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
 use musix::MusicError;
-use scripting::Scripting;
+use scripting::Script;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::{self, Write as _, stdout};
@@ -69,7 +69,7 @@ pub struct RustPlay {
     fft_queue: VecDeque<(Instant, Vec<u8>)>,
     current_playing: Rc<dyn SongCollection>,
     current_song: usize,
-    scripting: Scripting,
+    scripting: Script,
     media_keys_receiver: mpsc::Receiver<MediaKeyEvent>,
     media_sender: mpsc::Sender<MediaKeyInfo>,
     favorites_dir: PathBuf,
@@ -97,7 +97,14 @@ impl RustPlay {
         }
 
         let (w, h) = terminal::size()?;
-        let scripting = Scripting::new().unwrap();
+
+        let script_path = PathBuf::from("init.rhai");
+        let script = if script_path.is_file() {
+            std::fs::read_to_string(&script_path)?
+        } else {
+            include_str!("../init.rhai").to_string()
+        };
+        let scripting = Script::new(script).unwrap();
 
         let templ = Template::new(&scripting.get_template(), w as usize, 10)?;
         let use_color = !args.no_color;

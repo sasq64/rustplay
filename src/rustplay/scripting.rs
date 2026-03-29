@@ -32,19 +32,18 @@ fn to_rhai_map<V: Clone + 'static>(hash_map: &HashMap<String, V>) -> rhai::Map {
         .collect::<rhai::Map>()
 }
 
-pub(crate) struct Scripting {
+pub(crate) struct Script {
     engine: rhai::Engine,
     ast: rhai::AST,
     shared_state: Rc<RefCell<SharedState>>,
 }
 
-impl Scripting {
-
+impl Script {
     pub fn get_template(&self) -> String {
         self.shared_state.borrow().template.clone()
     }
 
-    pub fn new() -> Result<Self, Box<dyn Error>> {
+    pub fn new(script: impl Into<String>) -> Result<Self, Box<dyn Error>> {
         let shared_state = Rc::new(RefCell::new(SharedState {
             ..SharedState::default()
         }));
@@ -86,15 +85,10 @@ impl Scripting {
         rhai_engine.register_type_with_name::<Value>("Value");
         rhai_engine.register_fn("to_string", |v: &mut Value| v.to_string());
 
-        let p = PathBuf::from("init.rhai");
-        let ast = if p.is_file() {
-            rhai_engine.compile_file(p)?
-        } else {
-            let script = include_str!("../../init.rhai");
-            rhai_engine.compile(script)?
-        };
+        let ast = rhai_engine.compile(script.into())?;
+
         rhai_engine.run_ast(&ast)?;
-        Ok(Scripting {
+        Ok(Script {
             engine: rhai_engine,
             ast,
             shared_state: shared_state.clone(),
@@ -125,5 +119,35 @@ impl Scripting {
             result.insert(name.into(), o);
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::{rustplay::scripting::Script, value::Value};
+
+    #[test]
+    fn test_scripting() {
+        let script = r#"
+template("hello");
+let vars = #{
+  a: #{ alias: "one"},
+  b: #{ color: 0xff8040 },
+};
+set_vars(vars);
+        "#;
+
+        let scripting = Script::new(script).unwrap();
+        let templ = scripting.get_template();
+        assert_eq!(templ, "hello");
+        let meta = HashMap::from([("c".to_string(), Value::Text("hey".into()))]);
+        let vars = scripting.get_overrides(&meta).unwrap();
+        println!("{vars:?}");
+
+        let o = vars.get("b").unwrap();
+        assert_eq!(o.color, Some(0xff8040));
     }
 }
