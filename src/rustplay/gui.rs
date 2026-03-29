@@ -1,5 +1,5 @@
-use super::song::FileInfo;
-use crate::{rustplay::song::SongCollection, term_extra::SetReverse};
+use super::song::{FileInfo, SongArray, SongCollection};
+use crate::term_extra::SetReverse;
 use anyhow::Result;
 use crossterm::{
     QueueableCommand,
@@ -9,6 +9,7 @@ use crossterm::{
     terminal::{Clear, ClearType},
 };
 use std::io::{Write, stdout};
+use std::rc::Rc;
 
 // SONG MENU
 
@@ -22,7 +23,6 @@ pub enum KeyReturn {
     Navigate,
 }
 
-#[derive(Default)]
 pub struct SongMenu {
     pub start_pos: usize,
     pub selected: usize,
@@ -34,6 +34,25 @@ pub struct SongMenu {
     moved: bool,
     pub left: String,
     pub right: String,
+    songs: Rc<dyn SongCollection>,
+}
+
+impl Default for SongMenu {
+    fn default() -> Self {
+        Self {
+            start_pos: 0,
+            selected: 0,
+            width: 0,
+            height: 0,
+            fader: Vec::new(),
+            use_color: false,
+            scrolled: false,
+            moved: false,
+            left: String::new(),
+            right: String::new(),
+            songs: Rc::new(SongArray::default()),
+        }
+    }
 }
 
 impl SongMenu {
@@ -42,12 +61,23 @@ impl SongMenu {
         self.right = right.into();
     }
 
+    pub fn set_songs(&mut self, songs: Rc<dyn SongCollection>) {
+        self.songs = songs;
+        self.start_pos = 0;
+        self.selected = 0;
+        self.scrolled = true;
+    }
+
+    pub fn songs(&self) -> &Rc<dyn SongCollection> {
+        &self.songs
+    }
+
     fn fade(&self, i: usize) -> Color {
         let x: u8 = (155 + self.fader[i] * 10) as u8;
         Color::Rgb { r: x, g: x, b: x }
     }
 
-    pub fn draw(&mut self, song_list: &dyn SongCollection) -> Result<()> {
+    pub fn draw(&mut self) -> Result<()> {
         if self.fader.len() != self.height {
             self.fader.resize(self.height, 0);
         }
@@ -75,8 +105,8 @@ impl SongMenu {
         out.queue(cursor::MoveTo(0, 1))?
             .queue(SetBackgroundColor(black))?;
         let start = self.start_pos;
-        let end = (start + self.height).clamp(start, song_list.len());
-        let songs = &song_list.get_range(start, end);
+        let end = (start + self.height).clamp(start, self.songs.len());
+        let songs = &self.songs.get_range(start, end);
         if self.use_color {
             self.fader[self.selected - self.start_pos] = 10;
             for (i, song) in songs.iter().enumerate() {
@@ -116,7 +146,7 @@ impl SongMenu {
             height: height - 1,
             use_color,
             scrolled: true,
-            ..SongMenu::default()
+            ..Self::default()
         }
     }
 
@@ -131,12 +161,8 @@ impl SongMenu {
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    pub fn handle_key(
-        &mut self,
-        song_list: &dyn SongCollection,
-        key: event::KeyEvent,
-    ) -> Result<KeyReturn> {
-        let song_len = song_list.len();
+    pub fn handle_key(&mut self, key: event::KeyEvent) -> Result<KeyReturn> {
+        let song_len = self.songs.len();
         let old_selected = self.selected;
         match key.code {
             KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
@@ -157,7 +183,7 @@ impl SongMenu {
             KeyCode::PageDown => self.selected += self.height,
             KeyCode::Down => self.selected += 1,
             KeyCode::Enter => {
-                return Ok(KeyReturn::PlaySong(song_list.get(self.selected).clone()));
+                return Ok(KeyReturn::PlaySong(self.songs.get(self.selected).clone()));
             }
             _ => {}
         }
@@ -332,11 +358,11 @@ pub struct Fft {
 
 impl Fft {
     fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
-        const C: [char; 9] = ['█', '▇', '▆', '▅', '▄', '▃', '▂', '▁', ' '];
+        const BARS: [char; 9] = ['█', '▇', '▆', '▅', '▄', '▃', '▂', '▁', ' '];
         for x in 0..bars.len() {
             let n = (bars[x] * (h as f32 / 5.0)) as i32;
             for y in 0..h {
-                let bar_char = C[(((h - y) * 8) as i32 - n).clamp(0, 8) as usize];
+                let bar_char = BARS[(((h - y) * 8) as i32 - n).clamp(0, 8) as usize];
                 target[x * 3 + y * w] = bar_char;
                 target[x * 3 + 1 + y * w] = bar_char;
                 target[x * 3 + 2 + y * w] = ' ';
