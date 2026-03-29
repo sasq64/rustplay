@@ -75,12 +75,3 @@ impl From<MusicError> for Value {
     }
 }
 
-impl From<Value> for rhai::Dynamic {
-    fn from(value: Value) -> Self {
-        match value {
-            Value::Text(t) => rhai::Dynamic::from(t),
-            Value::Number(n) => rhai::Dynamic::from(n),
-            _ => rhai::Dynamic::from_int(0),
-        }
-    }
-}

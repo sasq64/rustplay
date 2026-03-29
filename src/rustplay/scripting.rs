@@ -1,13 +1,12 @@
-use rhai::FnPtr;
-use smartstring::SmartString;
-use std::{cell::RefCell, collections::HashMap, error::Error, path::PathBuf, rc::Rc};
+use mlua::prelude::*;
+use std::{cell::RefCell, collections::HashMap, error::Error, rc::Rc};
 
 /// Script override for a variable in the template string
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub struct TemplateVar {
     color: Option<u32>,
     alias: Option<String>,
-    func: Option<FnPtr>,
+    func: Option<LuaRegistryKey>,
 }
 
 /// Result of overriding
@@ -17,7 +16,7 @@ pub struct Override {
     pub value: Value,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Default)]
 pub(crate) struct SharedState {
     template: String,
     variables: HashMap<String, TemplateVar>,
@@ -25,16 +24,8 @@ pub(crate) struct SharedState {
 
 use crate::{log, value::Value};
 
-fn to_rhai_map<V: Clone + 'static>(hash_map: &HashMap<String, V>) -> rhai::Map {
-    hash_map
-        .iter()
-        .map(|(k, v)| (SmartString::from(k), rhai::Dynamic::from(v.clone())))
-        .collect::<rhai::Map>()
-}
-
 pub(crate) struct Script {
-    engine: rhai::Engine,
-    ast: rhai::AST,
+    lua: Lua,
     shared_state: Rc<RefCell<SharedState>>,
 }
 
@@ -44,79 +35,96 @@ impl Script {
     }
 
     pub fn new(script: impl Into<String>) -> Result<Self, Box<dyn Error>> {
-        let shared_state = Rc::new(RefCell::new(SharedState {
-            ..SharedState::default()
-        }));
+        let shared_state = Rc::new(RefCell::new(SharedState::default()));
 
-        let mut rhai_engine = rhai::Engine::new();
-        rhai_engine
-            .register_fn("template", {
+        let lua = Lua::new();
+
+        lua.globals().set(
+            "template",
+            lua.create_function({
                 let ss = shared_state.clone();
-                move |t: &str| t.clone_into(&mut ss.borrow_mut().template)
-            })
-            .register_fn("log", move |t: &str| log!("RHAI: {t}"))
-            .register_fn("log", move |t: &Value| log!("RHAI: {t}"))
-            .register_fn("set_vars", {
-                let ss = shared_state.clone();
-                move |vars: rhai::Map| {
-                    for (key, val) in vars.into_iter() {
-                        log!("KEY: {key}");
-                        if let Some(m) = val.try_cast::<rhai::Map>() {
-                            let mut tvar = TemplateVar {
-                                ..Default::default()
-                            };
-                            log!("Found map");
-                            for (key, val) in m.into_iter() {
-                                if key == "alias" {
-                                    tvar.alias = val.try_cast::<String>();
-                                } else if key == "func" {
-                                    tvar.func = val.try_cast::<FnPtr>();
-                                    log!("Func {:?}", tvar.func);
-                                } else if key == "color" {
-                                    tvar.color = val.try_cast::<i64>().map(|i| i as u32);
-                                    log!("Color {:?}", tvar.color);
-                                }
-                            }
-                            ss.borrow_mut().variables.insert(key.into(), tvar);
-                        }
-                    }
+                move |_, t: String| {
+                    ss.borrow_mut().template = t;
+                    Ok(())
                 }
-            });
-        rhai_engine.register_type_with_name::<Value>("Value");
-        rhai_engine.register_fn("to_string", |v: &mut Value| v.to_string());
+            })?,
+        )?;
 
-        let ast = rhai_engine.compile(script.into())?;
+        lua.globals().set(
+            "log",
+            lua.create_function(|_, t: String| {
+                log!("LUA: {t}");
+                Ok(())
+            })?,
+        )?;
 
-        rhai_engine.run_ast(&ast)?;
-        Ok(Script {
-            engine: rhai_engine,
-            ast,
-            shared_state: shared_state.clone(),
-        })
+        lua.globals().set(
+            "set_meta",
+            lua.create_function(|_, _: (String, String)| Ok(()))?,
+        )?;
+
+        lua.globals().set(
+            "set_vars",
+            lua.create_function({
+                let ss = shared_state.clone();
+                move |lua, vars: LuaTable| {
+                    for pair in vars.pairs::<String, LuaTable>() {
+                        let (key, map) = pair?;
+                        let mut tvar = TemplateVar::default();
+                        if let Ok(alias) = map.get::<String>("alias") {
+                            tvar.alias = Some(alias);
+                        }
+                        if let Ok(color) = map.get::<i64>("color") {
+                            tvar.color = Some(color as u32);
+                        }
+                        if let Ok(func) = map.get::<LuaFunction>("func") {
+                            tvar.func = Some(lua.create_registry_value(func)?);
+                        }
+                        ss.borrow_mut().variables.insert(key, tvar);
+                    }
+                    Ok(())
+                }
+            })?,
+        )?;
+
+        lua.load(script.into()).exec()?;
+
+        Ok(Script { lua, shared_state })
     }
 
-    /// Ask the script for custom colors and values to metadata
+    /// Ask the script for custom colors and values for metadata placeholders
     pub fn get_overrides(
         &self,
         meta: &HashMap<String, Value>,
     ) -> Result<HashMap<String, Override>, Box<dyn Error>> {
         let mut result = HashMap::new();
 
-        let rhai_map = to_rhai_map(meta);
+        let lua_meta = self.lua.create_table()?;
+        for (k, v) in meta {
+            match v {
+                Value::Text(s) => lua_meta.set(k.as_str(), s.as_str())?,
+                Value::Number(n) => lua_meta.set(k.as_str(), *n)?,
+                _ => lua_meta.set(k.as_str(), "")?,
+            }
+        }
+
         let ss = self.shared_state.borrow();
         for (name, tvar) in &ss.variables {
-            let o = Override {
-                color: tvar.color,
-                value: match &tvar.func {
-                    Some(func) => {
-                        let result =
-                            func.call::<String>(&self.engine, &self.ast, (rhai_map.clone(),))?;
-                        Value::Text(result)
-                    }
-                    None => Value::Unknown,
-                },
+            let value = match &tvar.func {
+                Some(key) => {
+                    let func: LuaFunction = self.lua.registry_value(key)?;
+                    let s: String = func.call(lua_meta.clone())?;
+                    Value::Text(s)
+                }
+                None => Value::Unknown,
             };
-            result.insert(name.into(), o);
+            result.insert(
+                name.clone(),
+                Override {
+                    color: tvar.color,
+                    value,
+                },
+            );
         }
         Ok(result)
     }
@@ -132,12 +140,13 @@ mod tests {
     #[test]
     fn test_scripting() {
         let script = r#"
-template("hello");
-let vars = #{
-  a: #{ alias: "one"},
-  b: #{ color: 0xff8040 },
-};
-set_vars(vars);
+
+local vars = {
+  a = { alias = "one" },
+  b = { color = 0xff8040 },
+}
+set_vars(vars)
+template("hello")
         "#;
 
         let scripting = Script::new(script).unwrap();
