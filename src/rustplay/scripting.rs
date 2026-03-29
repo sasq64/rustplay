@@ -1,3 +1,5 @@
+use mlua::UserData;
+use mlua::UserDataMethods;
 use mlua::prelude::*;
 use std::{cell::RefCell, collections::HashMap, error::Error, rc::Rc};
 
@@ -22,7 +24,16 @@ pub(crate) struct SharedState {
     variables: HashMap<String, TemplateVar>,
 }
 
-use crate::{log, value::Value};
+use crate::{RustPlay, log, value::Value};
+
+impl UserData for RustPlay {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("next_song", |_, this: &mut RustPlay, ()| {
+            this.next();
+            Ok(())
+        });
+    }
+}
 
 pub(crate) struct Script {
     lua: Lua,

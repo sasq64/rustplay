@@ -44,5 +44,10 @@ local vars = {
   count = { color = 0x808080 },
 }
 
+local keys = {
+  { "[", next_song }
+}
+
+
 set_vars(vars)
 template(templ)
