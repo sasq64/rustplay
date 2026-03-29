@@ -22,6 +22,9 @@
 - [x] Favorites play list
 - [ ] Goto author
 - [ ] Goto directory
+- [ ] song/startSong from .meta should be used
+- [ ] length from meta should be used
+- [ ] Letter keys in menu should jump to matching
 
 ### ISSUES
 
@@ -34,7 +37,9 @@
 - [ ] Separate menu state for all menues
 - [ ] No MP3 song length
 - [ ] Color of time elapsed
-
+- [ ] Navigate with no previous should go to files
+- [ ] Select current playing in menu if possible
+- [ ] title_and_composer <- base filename if no title
 
 ### VISUAL IMPROVEMENTS
 
@@ -43,6 +48,7 @@
 - [ ] File format color
 - [ ] Scroll sub_title
 - [ ] Fade/toggle sub title for tracker msg
+- [ ] Fade in/out messages
 
 ### SCRIPTABLE LOOK
 
