@@ -1,12 +1,14 @@
 use anyhow::Result;
 use audioadapter_buffers::direct::InterleavedSlice;
-use rubato::{Async, FixedAsync, SincInterpolationParameters, SincInterpolationType, WindowFunction};
+use rubato::{
+    Async, FixedAsync, SincInterpolationParameters, SincInterpolationType, WindowFunction,
+};
 
 #[allow(clippy::struct_field_names)]
 pub struct Resampler {
     resampler: Async<f32>,
     wave_out: Vec<f32>,
-    samples_out: Vec<f32>,
+    //samples_out: Vec<f32>,
     buffer_size: usize,
     enabled: bool,
 }
@@ -24,11 +26,9 @@ impl Resampler {
         let resampler =
             Async::<f32>::new_sinc(1.0, 4.0, &params, buffer_size, 2, FixedAsync::Input)?;
         let wave_out: Vec<f32> = vec![0.0; buffer_size * 6];
-        let samples_out: Vec<f32> = vec![0.0; buffer_size * 6];
         Ok(Resampler {
             resampler,
             wave_out,
-            samples_out,
             buffer_size,
             enabled: false,
         })
@@ -54,9 +54,7 @@ impl Resampler {
             let (_rcount, wcount) =
                 self.resampler
                     .process_into_buffer(&input, &mut output, None)?;
-            self.samples_out.resize(wcount * 2, 0.0);
-            self.samples_out.copy_from_slice(&self.wave_out[..wcount * 2]);
-            return Ok(&self.samples_out);
+            return Ok(&self.wave_out[..wcount * 2]);
         }
         Ok(samples)
     }

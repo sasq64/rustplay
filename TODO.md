@@ -28,7 +28,8 @@
 
 ### ISSUES
 
-- [ ] No FFT when sample data is non-power-of-two
+- [ ] Fix no color mode
+- [x] No FFT when sample data is non-power-of-two
 - [x] FFT delay for bluetooth
 - [ ] Song count 0/empty
 - [x] Use 'zip' directly
@@ -57,4 +58,3 @@
 ### CODE STRUCTURE
 
 - [x] Refactor to main + lib
-

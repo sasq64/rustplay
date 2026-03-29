@@ -6,9 +6,9 @@ use anyhow::Result;
 use anyhow::anyhow;
 
 pub(crate) struct Fft {
-    pub divider: usize,
-    pub min_freq: f32,
-    pub max_freq: f32,
+    pub divider: usize, // 4
+    pub min_freq: f32, // 15
+    pub max_freq: f32, // 4000
 }
 
 impl Fft {

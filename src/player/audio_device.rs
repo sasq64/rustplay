@@ -6,11 +6,9 @@ use anyhow::Result;
 pub(crate) type AudioCallback = Box<dyn FnMut(&mut [f32]) + Send>;
 
 pub(crate) trait AudioDevice {
-    fn play(
-        &mut self,
-        callback: AudioCallback,
-        device_latency_us: Arc<AtomicUsize>,
-    ) -> Result<()>;
+    fn play(&mut self, callback: AudioCallback, device_latency_us: Arc<AtomicUsize>) -> Result<()>;
+    /// Guranteed to be power of 2 aligned
     fn get_buffer_size(&self) -> usize;
     fn get_playback_freq(&self) -> u32;
 }
+
