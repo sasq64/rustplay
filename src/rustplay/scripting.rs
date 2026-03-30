@@ -1,7 +1,12 @@
+use crokey::KeyCombinationFormat;
+use crossterm::event::KeyCode;
+use crossterm::event::KeyEvent;
+use crossterm::event::KeyEventState;
+use crossterm::event::KeyModifiers;
 use mlua::UserData;
 use mlua::UserDataMethods;
 use mlua::prelude::*;
-use std::{cell::RefCell, collections::HashMap, error::Error, rc::Rc};
+use std::{collections::HashMap, error::Error};
 
 /// Script override for a variable in the template string
 #[derive(Default)]
@@ -15,51 +20,119 @@ pub struct TemplateVar {
 #[derive(Clone, Debug, Default)]
 pub struct Override {
     pub color: Option<u32>,
+    pub alias: Option<String>,
     pub value: Value,
 }
 
-#[derive(Default)]
-pub(crate) struct SharedState {
-    template: String,
-    variables: HashMap<String, TemplateVar>,
-}
-
+use crate::rustplay::song::FileInfo;
+use crate::rustplay::state::InputMode;
 use crate::{RustPlay, log, value::Value};
+
+impl UserData for FileInfo {
+    fn add_methods<M: UserDataMethods<Self>>(_methods: &mut M) {}
+}
 
 impl UserData for RustPlay {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("next_song", |_, this: &mut RustPlay, ()| {
+        methods.add_method_mut("next", |_, this: &mut RustPlay, ()| {
             this.next();
+            Ok(())
+        });
+        methods.add_method_mut("prev", |_, this: &mut RustPlay, ()| {
+            this.prev();
+            Ok(())
+        });
+        methods.add_method_mut("set_song", |_, this: &mut RustPlay, (song,): (u32,)| {
+            this.set_song(song);
+            Ok(())
+        });
+        methods.add_method_mut("goto_parent", |_, this: &mut RustPlay, ()| {
+            this.goto_parent().unwrap();
+            Ok(())
+        });
+        methods.add_method_mut("focus_search_edit", |_, this: &mut RustPlay, ()| {
+            this.focus_search_edit();
+            Ok(())
+        });
+        methods.add_method_mut("show_main", |_, this: &mut RustPlay, ()| {
+            this.show_main();
+            Ok(())
+        });
+        methods.add_method_mut("show_search_result", |_, this: &mut RustPlay, ()| {
+            this.show_search_result();
+            Ok(())
+        });
+        methods.add_method_mut("show_directory", |_, this: &mut RustPlay, ()| {
+            this.show_directory().unwrap();
+            Ok(())
+        });
+        methods.add_method_mut("show_favorites", |_, this: &mut RustPlay, ()| {
+            this.show_favorites();
+            Ok(())
+        });
+        methods.add_method_mut("show_current", |_, this: &mut RustPlay, ()| {
+            this.show_current();
+            Ok(())
+        });
+        methods.add_method_mut(
+            "add_favorite",
+            |_, this: &mut RustPlay, (song,): (LuaUserDataRef<FileInfo>,)| {
+                log!("Add fav");
+                let file_info: FileInfo = song.clone();
+                this.add_favorite(file_info.clone());
+                Ok(())
+            },
+        );
+        methods.add_method_mut("quit", |_, this: &mut RustPlay, ()| {
+            this.quit();
+            Ok(())
+        });
+        methods.add_method("get_selected_song", |_, this: &RustPlay, ()| {
+            Ok(this.get_selected_song())
+        });
+        methods.add_method("get_playing_song", |_, this: &RustPlay, ()| {
+            Ok(this.get_playing_song())
+        });
+        methods.add_method("input_mode", |_, this: &RustPlay, ()| {
+            Ok(match this.input_mode() {
+                InputMode::Main => "n",
+                InputMode::SearchInput => "s",
+                InputMode::DirScreen => "d",
+                InputMode::SearchScreen => "s",
+                InputMode::FavScreen => "f",
+                InputMode::ResultScreen => "r",
+            })
+        });
+        methods.add_method_mut("add_char", |_, this: &mut RustPlay, (s,): (String,)| {
+            let ke: KeyEvent = crokey::parse(&s).unwrap().into();
+            this.add_char(ke).unwrap();
             Ok(())
         });
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+enum MappedKey {
+    Code(KeyCode, KeyModifiers),
+    Digit,
+    Letter,
+}
+
 pub(crate) struct Script {
     lua: Lua,
-    shared_state: Rc<RefCell<SharedState>>,
+    template: String,
+    variables: HashMap<String, TemplateVar>,
+    keys: HashMap<InputMode, HashMap<MappedKey, LuaFunction>>,
+    pub info: Option<String>,
 }
 
 impl Script {
     pub fn get_template(&self) -> String {
-        self.shared_state.borrow().template.clone()
+        self.template.clone()
     }
 
     pub fn new(script: impl Into<String>) -> Result<Self, Box<dyn Error>> {
-        let shared_state = Rc::new(RefCell::new(SharedState::default()));
-
         let lua = Lua::new();
-
-        lua.globals().set(
-            "template",
-            lua.create_function({
-                let ss = shared_state.clone();
-                move |_, t: String| {
-                    ss.borrow_mut().template = t;
-                    Ok(())
-                }
-            })?,
-        )?;
 
         lua.globals().set(
             "log",
@@ -69,20 +142,63 @@ impl Script {
             })?,
         )?;
 
-        lua.globals().set(
-            "set_meta",
-            lua.create_function(|_, _: (String, String)| Ok(()))?,
-        )?;
+        let prelude = r#"
+function next_song() rust_play:next() end
+function prev_song() rust_play:prev() end
+function sub_song(n) rust_play:set_song(n) end
+function goto_parent() rust_play:goto_parent() end
+function show_favorites() rust_play:show_favorites() end
+function show_directory() rust_play:show_directory() end
+function focus_search() rust_play:focus_search_edit() end
+function quit() rust_play:quit() end
+function get_selected_song() return rust_play:get_selected_song() end
+function get_playing_song() return rust_play:get_playing_song() end
+function add_favorite(song) rust_play:add_favorite(song) end
+function add_char(c) rust_play:add_char(c) end
+function show_current() rust_play:show_current() end
+"#;
+        lua.load(prelude).exec()?;
 
-        lua.globals().set(
-            "set_vars",
-            lua.create_function({
-                let ss = shared_state.clone();
-                move |lua, vars: LuaTable| {
-                    for pair in vars.pairs::<String, LuaTable>() {
+        let mut template = String::new();
+        let mut variables = HashMap::<String, TemplateVar>::new();
+        let mut keys = HashMap::<InputMode, HashMap<MappedKey, LuaFunction>>::new();
+
+        let modes: HashMap<char, InputMode> = [
+            ('n', InputMode::Main),
+            ('f', InputMode::FavScreen),
+            ('d', InputMode::DirScreen),
+            ('s', InputMode::SearchScreen),
+            ('i', InputMode::SearchInput),
+        ]
+        .into();
+
+        for mode in modes.values() {
+            keys.insert(*mode, HashMap::new());
+        }
+        let mut info = None;
+
+        let table: mlua::Table = lua.load(script.into()).eval()?;
+        for pair in table.pairs::<mlua::Value, mlua::Value>() {
+            let (key, value) = pair?;
+            let key_str = match key {
+                mlua::Value::String(s) => s.to_str()?.to_string(),
+                _ => continue,
+            };
+            match key_str.as_str() {
+                "info" => {
+                    info = Some(value.to_string()?.clone());
+                }
+                "template" => {
+                    let val = value.to_string()?;
+                    template = val.clone();
+                    //shared_state.borrow_mut().template = val;
+                }
+                "vars" => {
+                    let t = value.as_table().unwrap();
+                    for pair in t.pairs::<String, LuaTable>() {
                         let (key, map) = pair?;
                         let mut tvar = TemplateVar::default();
-                        if let Ok(alias) = map.get::<String>("alias") {
+                        if let Ok(alias) = map.get::<String>("alias_for") {
                             tvar.alias = Some(alias);
                         }
                         if let Ok(color) = map.get::<i64>("color") {
@@ -91,16 +207,100 @@ impl Script {
                         if let Ok(func) = map.get::<LuaFunction>("func") {
                             tvar.func = Some(lua.create_registry_value(func)?);
                         }
-                        ss.borrow_mut().variables.insert(key, tvar);
+                        variables.insert(key, tvar);
                     }
-                    Ok(())
                 }
-            })?,
-        )?;
+                "keys" => {
+                    let t = value.as_table().unwrap();
+                    for item in t.sequence_values::<LuaTable>().flatten() {
+                        let mut mode = item.get::<String>(1)?;
+                        mode = mode.replace("a", "nidfs");
+                        mode = mode.replace("r", "dfs");
+                        let key = item.get::<String>(2)?;
+                        for key in key.split(',') {
+                            log!("KEY {key} MODE {mode}");
+                            let mk = if key == ":digit:" {
+                                MappedKey::Digit
+                            } else if key == ":letter:" {
+                                MappedKey::Letter
+                            } else {
+                                let ke: KeyEvent = crokey::parse(key)?.into();
+                                MappedKey::Code(ke.code, ke.modifiers)
+                            };
 
-        lua.load(script.into()).exec()?;
+                            let action = item.get::<mlua::Value>(3)?;
+                            for c in mode.chars() {
+                                let input_mode = modes.get(&c).unwrap();
+                                match &action {
+                                    mlua::Value::Function(f) => {
+                                        keys.get_mut(input_mode)
+                                            .unwrap()
+                                            .insert(mk.clone(), f.clone());
+                                    }
+                                    _ => panic!("Wrong type"),
+                                }
+                            }
+                        }
+                    }
+                }
 
-        Ok(Script { lua, shared_state })
+                _ => {}
+            }
+        }
+
+        Ok(Script {
+            lua,
+            template,
+            variables,
+            keys,
+            info,
+        })
+    }
+
+    pub fn handle_key(
+        &mut self,
+        rust_play: &mut RustPlay,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        mode: InputMode,
+    ) -> Result<bool, Box<dyn Error>> {
+        let fmt = KeyCombinationFormat::default();
+        let ke = KeyEvent {
+            code,
+            modifiers,
+            kind: crossterm::event::KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        };
+        let text = fmt.to_string(ke);
+        log!("TEXT: {text}");
+
+        // if let KeyCode::Char(c) = code {
+        //     text = c.to_string();
+        // }
+        let mut mapped_keys = vec![MappedKey::Code(code, modifiers)];
+        if let KeyCode::Char(d) = code
+            && modifiers == KeyModifiers::NONE
+        {
+            if d.is_ascii_digit() {
+                mapped_keys.push(MappedKey::Digit);
+            }
+            if d.is_alphabetic() {
+                mapped_keys.push(MappedKey::Letter);
+            }
+        };
+
+        let keys = self.keys.get(&mode).unwrap();
+        for mapped_key in mapped_keys.into_iter() {
+            if let Some(f) = keys.get(&mapped_key) {
+                let _ = self.lua.scope(|scope| {
+                    let ud = scope.create_userdata_ref_mut(rust_play)?;
+                    self.lua.globals().set("rust_play", ud)?;
+                    Ok(f.call::<bool>((text.clone(),)).unwrap())
+                })?;
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     /// Ask the script for custom colors and values for metadata placeholders
@@ -119,8 +319,7 @@ impl Script {
             }
         }
 
-        let ss = self.shared_state.borrow();
-        for (name, tvar) in &ss.variables {
+        for (name, tvar) in &self.variables {
             let value = match &tvar.func {
                 Some(key) => {
                     let func: LuaFunction = self.lua.registry_value(key)?;
@@ -133,6 +332,7 @@ impl Script {
                 name.clone(),
                 Override {
                     color: tvar.color,
+                    alias: tvar.alias.clone(),
                     value,
                 },
             );

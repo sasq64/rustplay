@@ -254,6 +254,9 @@ impl SongIndexer {
                 .unwrap_or_default();
             meta_data.insert("title".into(), title.into());
         }
+        if let Ok(md) = std::fs::metadata(path) {
+            meta_data.insert("size".into(), Value::Number(md.len() as f64));
+        }
         let meta_path = path.with_extension(format!(
             "{}.meta",
             path.extension()

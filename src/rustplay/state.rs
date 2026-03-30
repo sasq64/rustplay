@@ -2,12 +2,16 @@ use std::collections::{HashMap, VecDeque};
 
 use crate::value::Value;
 
-#[derive(Default, Debug, Clone, Copy, PartialEq)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum InputMode {
     #[default]
     Main,
     SearchInput,
     ResultScreen,
+    // More specfic than above
+    FavScreen,
+    DirScreen,
+    SearchScreen,
 }
 
 pub(crate) enum Msg {

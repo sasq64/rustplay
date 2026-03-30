@@ -21,8 +21,6 @@ pub struct Template {
     templ: Vec<String>,
     data: HashMap<String, PlaceHolder>,
     re: Regex,
-    renames: HashMap<String, String>,
-    colors: HashMap<String, u32>,
 }
 
 fn dup_lines(dup_indexes: &[usize], lines: &mut Vec<String>, h: usize) {
@@ -101,37 +99,8 @@ impl Template {
     /// `$<symbol>` Pattern first replaced with spaces then with value from
     /// hashmap
     ///
-    /// Special lines
-    ///
-    /// Variable alias `@short_symbol = real_symbol`
-    ///
     pub fn new(templ: &str, w: usize, h: usize) -> Result<Template> {
-        let alias_re = Regex::new(r"\@(\w+)=(\w+)?(:#([a-fA-F0-9]+))?")?;
-
-        let mut renames: HashMap<String, String> = HashMap::new();
-        let mut colors: HashMap<String, u32> = HashMap::new();
-
-        // Strip alias assignments from template
-        let raw_lines: Vec<String> = templ
-            .lines()
-            .filter(|line| {
-                if let Some(m) = alias_re.captures(line) {
-                    if let Some(var) = m.get(1) {
-                        if let Some(alias) = m.get(2) {
-                            renames.insert(alias.as_str().to_string(), var.as_str().to_string());
-                        }
-                        if let Some(color) = m.get(4)
-                            && let Ok(rgb) = u32::from_str_radix(color.as_str(), 16)
-                        {
-                            colors.insert(var.as_str().to_string(), rgb);
-                        }
-                    }
-                    return false;
-                }
-                true
-            })
-            .map(|line| line.to_string())
-            .collect();
+        let raw_lines: Vec<String> = templ.lines().map(|line| line.to_string()).collect();
 
         let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))")?;
 
@@ -140,8 +109,6 @@ impl Template {
             templ: Vec::new(),
             data: HashMap::new(),
             re,
-            renames,
-            colors,
         };
 
         template.draw(w, h);
@@ -199,21 +166,11 @@ impl Template {
             for cap in self.re.captures_iter(line) {
                 let m = cap.get(0).unwrap();
                 if let Some(x) = cap.name("var") {
-                    let n: String;
-                    if let Some(new_name) = self.renames.get(x.as_str()) {
-                        n = new_name.clone();
-                    } else {
-                        n = x.as_str().to_string();
-                    }
-                    let mut color: u32 = 0xff_ff_ff;
-                    if let Some(new_color) = self.colors.get(x.as_str()) {
-                        color = *new_color;
-                    }
-
+                    let color: u32 = 0xff_ff_ff;
                     let col = line[..m.start()].chars().count();
                     let len = line[m.start()..m.end()].chars().count();
                     data.insert(
-                        n,
+                        x.as_str().into(),
                         PlaceHolder {
                             start: m.start(),
                             end: m.end(),

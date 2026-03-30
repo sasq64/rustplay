@@ -23,6 +23,13 @@ pub enum KeyReturn {
     Navigate,
 }
 
+pub enum MenuNav {
+    Up,
+    Down,
+    PageUp,
+    PageDown,
+}
+
 pub struct SongMenu {
     pub start_pos: usize,
     pub selected: usize,
@@ -160,35 +167,32 @@ impl SongMenu {
         self.scrolled = true;
     }
 
+    pub fn get_current(&self) -> FileInfo {
+        self.songs.get(self.selected).clone()
+    }
+
     #[allow(clippy::unnecessary_wraps)]
-    pub fn handle_key(&mut self, key: event::KeyEvent) -> Result<KeyReturn> {
+    pub fn handle_nav(&mut self, nav: MenuNav) -> bool {
         let song_len = self.songs.len();
         let old_selected = self.selected;
-        match key.code {
-            KeyCode::Esc => return Ok(KeyReturn::ExitMenu),
-            KeyCode::Char('/') => return Ok(KeyReturn::Up),
-            KeyCode::Char(_) => return Ok(KeyReturn::Navigate),
-            KeyCode::Up => {
+        match nav {
+            MenuNav::Up => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
             }
-            KeyCode::PageUp => {
+            MenuNav::PageUp => {
                 if self.selected >= self.height {
                     self.selected -= self.height;
                 } else {
                     self.selected = 0;
                 }
             }
-            KeyCode::PageDown => self.selected += self.height,
-            KeyCode::Down => self.selected += 1,
-            KeyCode::Enter => {
-                return Ok(KeyReturn::PlaySong(self.songs.get(self.selected).clone()));
-            }
-            _ => {}
+            MenuNav::PageDown => self.selected += self.height,
+            MenuNav::Down => self.selected += 1,
         }
         if self.selected == old_selected {
-            return Ok(KeyReturn::Nothing);
+            return true;
         }
         self.moved = true;
 
@@ -211,8 +215,7 @@ impl SongMenu {
                 self.scrolled = true;
             }
         }
-
-        Ok(KeyReturn::Nothing)
+        true
     }
 }
 
