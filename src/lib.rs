@@ -5,7 +5,6 @@
     clippy::cast_possible_wrap
 )]
 
-
 use std::{
     fs::{File, OpenOptions},
     io::Write,
@@ -53,7 +52,6 @@ macro_rules! log {
     }};
 }
 
-
 #[derive(Default, ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum VisualizerPos {
     #[default]
@@ -67,11 +65,11 @@ pub enum VisualizerPos {
 pub struct Args {
     songs: Vec<PathBuf>,
 
-    #[arg(long, default_value_t = 15)]
+    #[arg(long, default_value_t = 40)]
     /// Min frequency to show in visualizer
     min_freq: u32,
 
-    #[arg(long, default_value_t = 4000)]
+    #[arg(long, default_value_t = 12_000)]
     /// Max frequency to show in visualizer
     max_freq: u32,
 
@@ -79,7 +77,7 @@ pub struct Args {
     /// Where to show the visualizer
     visualizer: VisualizerPos,
 
-    #[arg(long, short = 'd', default_value_t = 4)]
+    #[arg(long, short = 'd', default_value_t = 1)]
     // How much to divide FFT data
     fft_div: usize,
 
@@ -93,4 +91,3 @@ pub struct Args {
     #[arg(long, short = 'c', default_value_t = false)]
     no_color: bool,
 }
-

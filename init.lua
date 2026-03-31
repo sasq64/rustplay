@@ -37,6 +37,13 @@ local templ = [[
  ┃ $time    / $len  ┃ SONG ┃ $a/$b ┃ FORMAT ┃ $fmt $>  $count┃
  ┗━━━━━━━━━━━━━━━━━━┻━━━━━━┻━━━━━━━┻━━━━━━━━┻━━━━━━$>━━━━━━━━┛
   NEXT: $next_song
+
+$search
+ $fft
+ .
+ .
+ .
+ .
 ]]
 
 
@@ -56,6 +63,8 @@ if false then
       focus_search()
       add_char(x)
     end },
+    { "r", "Enter", enter_or_play_selected },
+    { "r", "Esc",   show_main },
     { "ni", "Up,Down,PageUp,PageDown", function(x)
       show_current()
       add_char(x)
@@ -78,11 +87,15 @@ if false then
   }
 else
   keys = {
-    { "n", "s",           focus_search },
+    { "n", "s",     focus_search },
+    { "n", "Left",  prev_subtune },
+    { "n", "Right", next_subtune },
     { "n", "Up,Down,PageUp,PageDown", function(x)
       show_current()
       add_char(x)
     end },
+    { "r", "Enter", enter_or_play_selected },
+    { "r", "Esc",   show_main },
     { "n", "a", function()
       add_favorite(get_playing_song())
     end },

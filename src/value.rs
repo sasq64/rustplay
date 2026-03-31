@@ -21,7 +21,7 @@ pub(crate) enum Value {
 impl Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Value::Text(s) => f.write_str(s.as_str())?,
+            Value::Text(s) => write!(f, "{}", s)?,
             Value::Number(n) => write!(f, "{n:02}")?,
             Value::Error(e) => write!(f, "{e}")?,
             Value::Data(_) => write!(f, "Data")?,
@@ -74,4 +74,3 @@ impl From<MusicError> for Value {
         Value::Error(item)
     }
 }
-

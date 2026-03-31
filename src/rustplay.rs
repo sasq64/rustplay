@@ -112,11 +112,8 @@ impl RustPlay {
         let use_color = !args.no_color;
 
         let th = templ.height();
-        let (x, y) = if args.visualizer == VisualizerPos::Right {
-            (73, 0)
-        } else {
-            (1, 9)
-        };
+
+        let (x, y) = templ.get_pos("fft").unwrap_or((1, 9));
 
         let data_dir = if let Some(cache_dir) = dirs::cache_dir() {
             let dest_dir = cache_dir.join("oldplay-data");
@@ -158,7 +155,10 @@ impl RustPlay {
 
         let songs = Self::load_favorites(&favorites_dir);
         let mut fav_menu = gui::SongMenu::new(use_color, w.into(), h.into());
-        fav_menu.set_songs(Rc::new(SongArray { songs }));
+        fav_menu.set_songs("Favorites", Rc::new(SongArray { songs }));
+
+        let (sx, sy) = templ.get_pos("search").unwrap_or((1, (th + 1) as u16));
+
         Ok(RustPlay {
             cmd_producer,
             info_consumer,
@@ -194,8 +194,8 @@ impl RustPlay {
                     gui::SongMenu::new(use_color, w.into(), h.into()),
                 ),
             ]),
-            current_menu: MenuId::Search,
-            search_component: gui::SearchField::new(th),
+            current_menu: MenuId::Dir,
+            search_component: gui::SearchField::new(sx, sy, use_color),
             fft_component: gui::Fft {
                 data: Vec::new(),
                 use_color,
@@ -325,7 +325,7 @@ impl RustPlay {
         }
         // TODO: Separate update() function for things like this
         if self.state.len_msec > 0 && play_time > self.state.len_msec {
-            self.next();
+            self.next_song();
         }
 
         if self.no_term {
@@ -357,9 +357,12 @@ impl RustPlay {
             let info: String = scripting.info.clone().unwrap_or(
                 "[s] = search, [f] = favorites, [a] = add favorite, [n] = next".to_string(),
             );
-            out.queue(cursor::MoveTo(0, self.search_component.ypos as u16 + 1))?
-                .queue(self.fg_color(Color::Grey))?
-                .queue(Print(info))?;
+            out.queue(cursor::MoveTo(
+                self.search_component.xpos,
+                self.search_component.ypos,
+            ))?
+            .queue(self.fg_color(Color::Grey))?
+            .queue(Print(info))?;
         }
         out.queue(&black_bg)?;
 
@@ -433,14 +436,10 @@ impl RustPlay {
     }
 
     fn search(&mut self, query: &str) -> Result<()> {
-        self.menus
-            .get_mut(&MenuId::Search)
-            .unwrap()
-            .set_title(format!("Search: \"{}\"", query), "");
         log!("Searching for {}", query);
         let songs = self.indexer.search(query)?;
         self.get_menu(&MenuId::Search)
-            .set_songs(Rc::new(SongArray { songs }));
+            .set_songs(query, Rc::new(SongArray { songs }));
         if self.show_search_result() {
             self.current_menu = MenuId::Search;
             self.state.mode = InputMode::ResultScreen;
@@ -460,11 +459,11 @@ impl RustPlay {
         self.send_cmd(move |player| player.set_song(song as i32));
     }
 
-    fn next_song(&mut self) {
+    fn next_subtune(&mut self) {
         self.send_cmd(Player::next_song);
     }
 
-    fn prev_song(&mut self) {
+    fn prev_subtune(&mut self) {
         self.send_cmd(Player::prev_song);
     }
 
@@ -474,6 +473,9 @@ impl RustPlay {
         self.state.changed = true;
         self.height = height as usize;
         self.templ.draw(width as usize, height as usize);
+        let (x, y) = self.templ.get_pos("fft").unwrap_or((1, 9));
+        self.fft_component.x = x;
+        self.fft_component.y = y;
         for m in self.menus.values_mut() {
             m.resize(width as usize, height as usize);
         }
@@ -491,12 +493,12 @@ impl RustPlay {
     fn show_directory(&mut self) -> Result<()> {
         let songs = self.indexer.browse(&self.current_dir)?;
         let dir_menu = self.menus.get_mut(&MenuId::Dir).unwrap();
-        dir_menu.set_songs(Rc::new(SongArray { songs }));
         let name = self
             .current_dir
-            .strip_prefix(&self.start_dir)?
+            //.strip_prefix(&self.start_dir)?
             .to_string_lossy();
-        dir_menu.set_title(format!("\"{name}\""), "[/] = Parent");
+        dir_menu.set_songs(name, Rc::new(SongArray { songs }));
+        //dir_menu.set_info(format!("\"{name}\""), "[/] = Parent");
         self.current_menu = MenuId::Dir;
         self.state.mode = InputMode::ResultScreen;
         Ok(())
@@ -507,15 +509,14 @@ impl RustPlay {
     }
 
     pub fn show_current(&mut self) {
+        if self.current_menu == MenuId::Dir {
+            self.show_directory().unwrap();
+        }
         self.state.mode = InputMode::ResultScreen;
     }
 
     pub fn show_favorites(&mut self) {
         if !self.menus[&MenuId::Favorites].songs().is_empty() {
-            self.menus
-                .get_mut(&MenuId::Favorites)
-                .unwrap()
-                .set_title("Favorites", "");
             self.current_menu = MenuId::Favorites;
             self.state.mode = InputMode::ResultScreen;
         } else {
@@ -558,157 +559,60 @@ impl RustPlay {
         }
     }
 
-    pub fn handle_keys(&mut self) -> Result<bool> {
-        if self.no_term {
-            return Ok(false);
+    fn enter_or_play_selected(&mut self) -> Result<()> {
+        let menu = self.current_menu();
+        let song = menu.get_current();
+        if song.file_type == FileType::Dir {
+            self.current_dir = song.path;
+            self.show_directory()?;
+        } else {
+            self.current_playlist = self.current_menu().songs().clone();
+            self.current_song = self.current_playlist.index_of(&song).unwrap_or(0);
+            self.play_song(&song);
+            self.state.changed = true;
+            self.state.mode = InputMode::Main;
         }
-        if !event::poll(std::time::Duration::from_millis(40))? {
-            return Ok(false);
+        Ok(())
+    }
+
+    fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
+        let mut scripting = self.scripting.take().unwrap();
+        let mode = self.input_mode();
+        let handled_by_script = scripting
+            .handle_key(self, key.code, key.modifiers, mode)
+            .unwrap();
+        self.scripting = Some(scripting);
+        if handled_by_script {
+            return Ok(self.state.quit);
         }
-        match event::read()? {
-            Event::Resize(width, height) => {
-                self.handle_resize(width, height);
-            }
-            Event::Key(key) => {
-                if key.kind == event::KeyEventKind::Press {
-                    let mut scripting = self.scripting.take().unwrap();
-                    let mode = if self.state.mode == InputMode::ResultScreen {
-                        match self.current_menu {
-                            MenuId::Search => InputMode::SearchScreen,
-                            MenuId::Favorites => InputMode::FavScreen,
-                            MenuId::Dir => InputMode::DirScreen,
-                        }
-                    } else {
-                        self.state.mode
-                    };
-                    let handled_by_script = scripting
-                        .handle_key(self, key.code, key.modifiers, mode)
-                        .unwrap();
-                    self.scripting = Some(scripting);
-                    if handled_by_script {
-                        return Ok(self.state.quit);
-                    }
-                    if self.state.mode == InputMode::ResultScreen {
-                        let menu = self.current_menu();
-                        match key.code {
-                            KeyCode::Up => menu.handle_nav(MenuNav::Up),
-                            KeyCode::Down => menu.handle_nav(MenuNav::Down),
-                            KeyCode::PageUp => menu.handle_nav(MenuNav::PageUp),
-                            KeyCode::PageDown => menu.handle_nav(MenuNav::PageDown),
-                            KeyCode::Enter => {
-                                let song = menu.get_current();
-                                if song.file_type == FileType::Dir {
-                                    self.current_dir = self.current_dir.join(song.path);
-                                    self.show_directory()?;
-                                } else {
-                                    self.current_playlist = self.current_menu().songs().clone();
-                                    self.current_song =
-                                        self.current_playlist.index_of(&song).unwrap_or(0);
-                                    self.play_song(&song);
-                                    self.state.changed = true;
-                                    self.state.mode = InputMode::Main;
-                                }
-                                true
-                            }
-                            KeyCode::Esc => {
-                                self.state.changed = true;
-                                self.state.mode = self.state.last_mode;
-                                true
-                            }
-                            KeyCode::Char('/') => {
-                                if self.current_dir != self.start_dir
-                                    && let Some(parent) = self.current_dir.parent()
-                                {
-                                    self.current_dir = parent.into();
-                                    self.show_directory()?;
-                                }
-                                true
-                            }
-                            _ => false,
-                        };
-                    } else if self.state.mode == InputMode::SearchInput {
-                        self.state.last_mode = InputMode::SearchInput;
-                        match self.search_component.handle_key(key)? {
-                            KeyReturn::Search(query) => {
-                                self.search(&query)?;
-                            }
-                            KeyReturn::ExitMenu => {
-                                self.state.changed = true;
-                                self.state.mode = InputMode::Main;
-                            }
-                            _ => {}
-                        }
-                    }
+        if self.state.mode == InputMode::ResultScreen {
+            let menu = self.current_menu();
+            match key.code {
+                KeyCode::Up => menu.handle_nav(MenuNav::Up),
+                KeyCode::Down => menu.handle_nav(MenuNav::Down),
+                KeyCode::PageUp => menu.handle_nav(MenuNav::PageUp),
+                KeyCode::PageDown => menu.handle_nav(MenuNav::PageDown),
+                _ => false,
+            };
+        } else if self.state.mode == InputMode::SearchInput {
+            self.state.last_mode = InputMode::SearchInput;
+            match self.search_component.handle_key(key)? {
+                KeyReturn::Search(query) => {
+                    self.search(&query)?;
                 }
+                KeyReturn::ExitMenu => {
+                    self.state.changed = true;
+                    self.state.mode = InputMode::Main;
+                }
+                _ => {}
             }
-            _ => {}
         }
-        Ok(self.state.quit)
+        Ok(false)
     }
 
-    fn get_song(&self, n: usize) -> Option<FileInfo> {
-        if n < self.current_playlist.len() {
-            return Some(self.current_playlist.get(n));
-        }
-        None
-    }
-
-    pub(crate) fn play_song(&mut self, song: &FileInfo) {
-        self.state.clear_meta();
-        for (name, val) in &song.meta_data {
-            log!("INDEX-META {name} = {val}");
-            if name == "composer"
-                && let Value::Text(composer) = val
-            {
-                let _ = self
-                    .media_sender
-                    .send(MediaKeyInfo::Author(composer.to_string()));
-            }
-            self.state.update_meta(name, val.clone());
-        }
-        if let Some(fname) = song.path().file_stem() {
-            let s = fname.to_string_lossy().to_string();
-            self.state.update_meta("file_name", Value::Text(s));
-        }
-        if let Some(next_song) = self.get_song(self.current_song + 1) {
-            self.state
-                .update_meta("next_song", Value::Text(next_song.full_song_name()));
-        }
-
-        let path = song.path().to_owned();
-        self.send_cmd(move |player| player.load(&path));
-    }
-
-    pub(crate) fn play_file(&mut self, file_name: String) {
-        self.play_song(&FileInfo {
-            path: PathBuf::from(file_name),
-            ..Default::default()
-        });
-    }
-
-    pub fn prev(&mut self) {
-        if !self.current_playlist.is_empty() {
-            if self.current_song > 1 {
-                self.current_song -= 1;
-            }
-            let song = self.current_playlist.get(self.current_song);
-            self.play_song(&song);
-        }
-    }
-    pub fn next(&mut self) {
-        if !self.current_playlist.is_empty() {
-            if (self.current_song + 1) < self.current_playlist.len() {
-                self.current_song += 1;
-            }
-            let song = self.current_playlist.get(self.current_song);
-            self.play_song(&song);
-        }
-    }
-
-    /// Update rustplay, read any meta data from player etc
     pub fn update(&mut self) -> Result<()> {
         if self.state.done {
-            self.next();
+            self.next_song();
             self.state.done = false;
         }
         let mut next_fft_at = None;
@@ -763,8 +667,8 @@ impl RustPlay {
         }
         if let Ok(cmd) = self.media_keys_receiver.try_recv() {
             match cmd {
-                MediaKeyEvent::Next => self.next(),
-                MediaKeyEvent::Previous => self.prev(),
+                MediaKeyEvent::Next => self.next_song(),
+                MediaKeyEvent::Previous => self.prev_song(),
                 MediaKeyEvent::Play => self.play_pause(),
                 MediaKeyEvent::Pause => self.play_pause(),
                 MediaKeyEvent::PlayPause => self.play_pause(),
@@ -774,6 +678,87 @@ impl RustPlay {
         Ok(())
     }
 
+    pub fn handle_events(&mut self) -> Result<bool> {
+        if self.no_term {
+            return Ok(false);
+        }
+        if !event::poll(std::time::Duration::from_millis(40))? {
+            return Ok(false);
+        }
+        match event::read()? {
+            Event::Resize(width, height) => {
+                self.handle_resize(width, height);
+            }
+            Event::Key(key) => {
+                if key.kind == event::KeyEventKind::Press {
+                    self.handle_key(key)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(self.state.quit)
+    }
+
+    fn get_song(&self, n: usize) -> Option<FileInfo> {
+        if n < self.current_playlist.len() {
+            return Some(self.current_playlist.get(n));
+        }
+        None
+    }
+
+    pub(crate) fn play_song(&mut self, song: &FileInfo) {
+        self.state.clear_meta();
+        for (name, val) in &song.meta_data {
+            log!("INDEX-META {name} = {val}");
+            if name == "composer"
+                && let Value::Text(composer) = val
+            {
+                let _ = self
+                    .media_sender
+                    .send(MediaKeyInfo::Author(composer.to_string()));
+            }
+            self.state.update_meta(name, val.clone());
+        }
+        if let Some(fname) = song.path().file_stem() {
+            let s = fname.to_string_lossy().to_string();
+            self.state.update_meta("file_name", Value::Text(s));
+        }
+        if let Some(next_song) = self.get_song(self.current_song + 1) {
+            self.state
+                .update_meta("next_song", Value::Text(next_song.full_song_name()));
+        }
+
+        let path = song.path().to_owned();
+        self.send_cmd(move |player| player.load(&path));
+    }
+
+    pub(crate) fn play_file(&mut self, file_name: String) {
+        self.play_song(&FileInfo {
+            path: PathBuf::from(file_name),
+            ..Default::default()
+        });
+    }
+
+    pub fn prev_song(&mut self) {
+        if !self.current_playlist.is_empty() {
+            if self.current_song > 1 {
+                self.current_song -= 1;
+            }
+            let song = self.current_playlist.get(self.current_song);
+            self.play_song(&song);
+        }
+    }
+    pub fn next_song(&mut self) {
+        if !self.current_playlist.is_empty() {
+            if (self.current_song + 1) < self.current_playlist.len() {
+                self.current_song += 1;
+            }
+            let song = self.current_playlist.get(self.current_song);
+            self.play_song(&song);
+        }
+    }
+
+    /// Update rustplay, read any meta data from player etc
     /// Add a path to the indexer
     pub fn add_path(&mut self, song: &Path) -> Result<()> {
         self.indexer.add_path(song)
@@ -879,7 +864,9 @@ impl RustPlay {
                 let mut lines = String::new();
                 for (key, value) in &song.meta_data {
                     match value {
-                        Value::Text(s) if !s.is_empty() => lines.push_str(&format!("{key}={s}\n")),
+                        Value::Text(s) if !s.is_empty() => {
+                            lines.push_str(&format!("{key}=\"{s}\"\n"))
+                        }
                         Value::Number(n) => lines.push_str(&format!("{key}={n}\n")),
                         _ => {}
                     }
@@ -892,7 +879,7 @@ impl RustPlay {
         }
         let songs = Self::load_favorites(&self.favorites_dir);
         self.get_menu(&MenuId::Favorites)
-            .set_songs(Rc::new(SongArray { songs }));
+            .set_songs("Favorites", Rc::new(SongArray { songs }));
     }
 
     /// Quit rustplay.

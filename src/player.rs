@@ -189,7 +189,6 @@ impl Player {
         Ok(true)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     pub fn quit(&mut self) -> PlayResult {
         self.play_state = PlayState::Quitting;
         Ok(true)
@@ -227,7 +226,7 @@ impl Player {
             while let Some(meta) = chip_player.get_changed_meta() {
                 let val = chip_player.get_meta_string(&meta).unwrap_or(String::new());
                 let v: Value = match meta.as_str() {
-                    "song" | "startSong" => {
+                    "song" | "startSong" | "startsong" => {
                         self.song = val.parse::<i32>()?;
                         self.song.into()
                     }
@@ -268,7 +267,7 @@ const AUDIO_THREAD_SLEEP_MS: u64 = 10;
 const IDLE_SLEEP_MS: u64 = 100;
 
 fn run_audio_loop<B: AudioBackend>(
-    fft: Fft,
+    mut fft: Fft,
     mut info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
@@ -367,6 +366,7 @@ fn run_audio_loop<B: AudioBackend>(
 
                 // Run FFT analysis on full buffers
                 let data = fft.run(&samples, playback_freq)?;
+                log!("{} {}", data.len(), samples.len());
                 // Compute total audio delay: ring buffer + device latency
                 let ring_delay_us =
                     audio_sink.occupied_len() as u64 * 1_000_000 / (playback_freq as u64 * 2);
@@ -400,6 +400,7 @@ pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
         divider: args.fft_div * 2,
         min_freq: args.min_freq as f32,
         max_freq: args.max_freq as f32,
+        ..Default::default()
     };
 
     let info_producer_error = info_producer.clone();

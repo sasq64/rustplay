@@ -266,7 +266,15 @@ impl SongIndexer {
         if let Ok(file) = File::open(&meta_path) {
             for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
                 if let Some((key, value)) = line.split_once('=') {
-                    meta_data.insert(key.to_string(), Value::Text(value.to_string()));
+                    if value.starts_with("\"") {
+                        let value = value.trim_start_matches('"').trim_end_matches('"');
+                        meta_data.insert(key.to_string(), Value::Text(value.into()));
+                    } else {
+                        meta_data.insert(
+                            key.to_string(),
+                            Value::Number(value.parse::<f64>().unwrap()),
+                        );
+                    }
                 }
             }
         }

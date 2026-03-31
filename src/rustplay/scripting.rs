@@ -34,12 +34,20 @@ impl UserData for FileInfo {
 
 impl UserData for RustPlay {
     fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
-        methods.add_method_mut("next", |_, this: &mut RustPlay, ()| {
-            this.next();
+        methods.add_method_mut("next_song", |_, this: &mut RustPlay, ()| {
+            this.next_song();
             Ok(())
         });
-        methods.add_method_mut("prev", |_, this: &mut RustPlay, ()| {
-            this.prev();
+        methods.add_method_mut("prev_song", |_, this: &mut RustPlay, ()| {
+            this.prev_song();
+            Ok(())
+        });
+        methods.add_method_mut("next_subtune", |_, this: &mut RustPlay, ()| {
+            this.next_subtune();
+            Ok(())
+        });
+        methods.add_method_mut("prev_subtune", |_, this: &mut RustPlay, ()| {
+            this.prev_subtune();
             Ok(())
         });
         methods.add_method_mut("set_song", |_, this: &mut RustPlay, (song,): (u32,)| {
@@ -72,6 +80,10 @@ impl UserData for RustPlay {
         });
         methods.add_method_mut("show_current", |_, this: &mut RustPlay, ()| {
             this.show_current();
+            Ok(())
+        });
+        methods.add_method_mut("enter_or_play_selected", |_, this: &mut RustPlay, ()| {
+            this.enter_or_play_selected().unwrap();
             Ok(())
         });
         methods.add_method_mut(
@@ -143,12 +155,15 @@ impl Script {
         )?;
 
         let prelude = r#"
-function next_song() rust_play:next() end
-function prev_song() rust_play:prev() end
+function next_song() rust_play:next_song() end
+function prev_song() rust_play:prev_song() end
+function next_subtune() rust_play:next_subtune() end
+function prev_subtune() rust_play:prev_subtune() end
 function sub_song(n) rust_play:set_song(n) end
 function goto_parent() rust_play:goto_parent() end
 function show_favorites() rust_play:show_favorites() end
 function show_directory() rust_play:show_directory() end
+function show_main() rust_play:show_main() end
 function focus_search() rust_play:focus_search_edit() end
 function quit() rust_play:quit() end
 function get_selected_song() return rust_play:get_selected_song() end
@@ -156,6 +171,7 @@ function get_playing_song() return rust_play:get_playing_song() end
 function add_favorite(song) rust_play:add_favorite(song) end
 function add_char(c) rust_play:add_char(c) end
 function show_current() rust_play:show_current() end
+function enter_or_play_selected() rust_play:enter_or_play_selected() end
 "#;
         lua.load(prelude).exec()?;
 

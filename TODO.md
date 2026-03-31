@@ -28,19 +28,24 @@
 
 ### ISSUES
 
-- [ ] Fix no color mode
+- [x] Fix no color mode
 - [x] No FFT when sample data is non-power-of-two
 - [x] FFT delay for bluetooth
 - [ ] Song count 0/empty
 - [x] Use 'zip' directly
 - [x] Open Startrekker with UADE
-- [ ] Go to parent dir should select previous
-- [ ] Separate menu state for all menues
+- [x] Go to parent dir should select previous
+- [x] Separate menu state for all menues
 - [ ] No MP3 song length
 - [ ] Color of time elapsed
-- [ ] Navigate with no previous should go to files
-- [ ] Select current playing in menu if possible
+- [x] Navigate with no previous should go to files
+- [o] Select current playing in menu if possible
 - [ ] title_and_composer <- base filename if no title
+- [x] Relative dir cant go to parent
+
+### REFACTOR
+
+- [ ] Plugin interface on rust side
 
 ### VISUAL IMPROVEMENTS
 
@@ -50,6 +55,8 @@
 - [ ] Scroll sub_title
 - [ ] Fade/toggle sub title for tracker msg
 - [ ] Fade in/out messages
+- [ ] Add colors to template
+- [ ] Parse json dur files for color data
 
 ### SCRIPTABLE LOOK
 

@@ -1,5 +1,5 @@
 use super::song::{FileInfo, SongArray, SongCollection};
-use crate::term_extra::SetReverse;
+use crate::{log, term_extra::SetReverse};
 use anyhow::Result;
 use crossterm::{
     QueueableCommand,
@@ -8,8 +8,11 @@ use crossterm::{
     style::{Color, Print, SetBackgroundColor, SetForegroundColor},
     terminal::{Clear, ClearType},
 };
-use std::io::{Write, stdout};
-use std::rc::Rc;
+use std::{
+    collections::{HashMap, VecDeque},
+    io::{Write, stdout},
+};
+use std::{hash::Hash, rc::Rc};
 
 // SONG MENU
 
@@ -39,9 +42,10 @@ pub struct SongMenu {
     pub use_color: bool,
     scrolled: bool,
     moved: bool,
-    pub left: String,
-    pub right: String,
+    pub location: String,
+    pub info: String,
     songs: Rc<dyn SongCollection>,
+    stack: HashMap<String, FileInfo>,
 }
 
 impl Default for SongMenu {
@@ -55,24 +59,37 @@ impl Default for SongMenu {
             use_color: false,
             scrolled: false,
             moved: false,
-            left: String::new(),
-            right: String::new(),
+            location: String::new(),
+            info: String::new(),
             songs: Rc::new(SongArray::default()),
+            stack: HashMap::new(),
         }
     }
 }
 
 impl SongMenu {
-    pub fn set_title(&mut self, left: impl Into<String>, right: impl Into<String>) {
-        self.left = left.into();
-        self.right = right.into();
+    pub fn set_info(&mut self, info: impl Into<String>) {
+        self.info = info.into();
     }
 
-    pub fn set_songs(&mut self, songs: Rc<dyn SongCollection>) {
-        self.songs = songs;
-        self.start_pos = 0;
+    pub fn set_songs(&mut self, location: impl Into<String>, songs: Rc<dyn SongCollection>) {
+        if self.selected < self.songs.len() {
+            self.stack
+                .insert(self.location.clone(), self.songs.get(self.selected));
+        }
+
         self.selected = 0;
+        self.start_pos = 0;
+        self.location = location.into();
+        self.songs = songs;
         self.scrolled = true;
+        if let Some(file_info) = self.stack.get(&self.location)
+            && let Some(index) = self.songs.index_of(file_info)
+        {
+            self.selected = index;
+        }
+
+        self.update_scrolling();
     }
 
     pub fn songs(&self) -> &Rc<dyn SongCollection> {
@@ -100,17 +117,28 @@ impl SongMenu {
         if self.scrolled {
             out.queue(Clear(ClearType::All))?;
         }
-        out.queue(cursor::MoveTo(0, 0))?
-            .queue(SetForegroundColor(white))?
-            .queue(SetBackgroundColor(Color::DarkRed))?
-            .queue(Print(format!(
-                "{}{:>width$}",
-                &self.left,
-                &self.right,
-                width = self.width - self.left.len()
-            )))?;
-        out.queue(cursor::MoveTo(0, 1))?
-            .queue(SetBackgroundColor(black))?;
+        if self.use_color {
+            out.queue(SetForegroundColor(white))?
+                .queue(SetBackgroundColor(Color::DarkRed))?
+                .queue(cursor::MoveTo(0, 0))?
+                .queue(Print(format!(
+                    "{}{:>width$}",
+                    &self.location,
+                    &self.info,
+                    width = self.width - self.location.len()
+                )))?
+                .queue(cursor::MoveTo(0, 1))?
+                .queue(SetBackgroundColor(black))?;
+        } else {
+            out.queue(cursor::MoveTo(0, 0))?
+                .queue(Print(format!(
+                    "{}{:>width$}",
+                    &self.location,
+                    &self.info,
+                    width = self.width - self.location.len()
+                )))?
+                .queue(cursor::MoveTo(0, 1))?;
+        }
         let start = self.start_pos;
         let end = (start + self.height).clamp(start, self.songs.len());
         let songs = &self.songs.get_range(start, end);
@@ -173,7 +201,6 @@ impl SongMenu {
 
     #[allow(clippy::unnecessary_wraps)]
     pub fn handle_nav(&mut self, nav: MenuNav) -> bool {
-        let song_len = self.songs.len();
         let old_selected = self.selected;
         match nav {
             MenuNav::Up => {
@@ -195,11 +222,18 @@ impl SongMenu {
             return true;
         }
         self.moved = true;
+        self.update_scrolling();
+        true
+    }
 
-        if self.selected < self.start_pos {
+    fn update_scrolling(&mut self) {
+        let song_len = self.songs.len();
+
+        while self.selected < self.start_pos {
             self.start_pos = self.start_pos.saturating_sub(self.height);
             self.scrolled = true;
-        } else if self.selected >= self.start_pos + self.height {
+        }
+        while self.selected >= self.start_pos + self.height {
             self.start_pos += self.height;
             self.scrolled = true;
         }
@@ -215,7 +249,6 @@ impl SongMenu {
                 self.scrolled = true;
             }
         }
-        true
     }
 }
 
@@ -284,20 +317,24 @@ impl Shell {
 
 pub struct SearchField {
     pub shell: Shell,
-    pub ypos: usize,
+    pub xpos: u16,
+    pub ypos: u16,
     pub prompt_color: Color,
     pub cursor_color: Color,
     pub text_color: Color,
+    pub use_color: bool,
 }
 
 impl SearchField {
-    pub fn new(ypos: usize) -> SearchField {
+    pub fn new(xpos: u16, ypos: u16, use_color: bool) -> SearchField {
         SearchField {
             shell: Shell::new(),
+            xpos,
             ypos,
             prompt_color: Color::Yellow,
             cursor_color: Color::Red,
             text_color: Color::Green,
+            use_color,
         }
     }
 }
@@ -307,17 +344,27 @@ impl SearchField {
         let mut out = stdout();
 
         let (first, cursor, last) = self.shell.command_line();
-
-        out.queue(cursor::MoveTo(0, self.ypos as u16 + 1))?
-            .queue(Clear(ClearType::UntilNewLine))?
-            .queue(SetForegroundColor(self.prompt_color))?
-            .queue(Print("> "))?
-            .queue(SetForegroundColor(self.text_color))?
-            .queue(Print(first))?
-            .queue(SetBackgroundColor(self.cursor_color))?
-            .queue(Print(cursor))?
-            .queue(SetBackgroundColor(Color::Reset))?
-            .queue(Print(last))?;
+        if self.use_color {
+            out.queue(cursor::MoveTo(self.xpos, self.ypos))?
+                .queue(Clear(ClearType::UntilNewLine))?
+                .queue(SetForegroundColor(self.prompt_color))?
+                .queue(Print("> "))?
+                .queue(SetForegroundColor(self.text_color))?
+                .queue(Print(first))?
+                .queue(SetBackgroundColor(self.cursor_color))?
+                .queue(Print(cursor))?
+                .queue(SetBackgroundColor(Color::Reset))?
+                .queue(Print(last))?;
+        } else {
+            out.queue(cursor::MoveTo(self.xpos, self.ypos))?
+                .queue(Clear(ClearType::UntilNewLine))?
+                .queue(Print("> "))?
+                .queue(Print(first))?
+                .queue(SetReverse(true))?
+                .queue(Print(cursor))?
+                .queue(SetReverse(false))?
+                .queue(Print(last))?;
+        }
 
         Ok(())
     }
@@ -376,6 +423,7 @@ impl Fft {
     pub fn update(&mut self, data: &[u8]) {
         if self.data.len() != data.len() {
             self.data.resize(data.len(), 0.0);
+            log!("FFT SIZE {}", data.len());
         }
         data.iter().zip(self.data.iter_mut()).for_each(|(a, b)| {
             let d = f32::from(*a);

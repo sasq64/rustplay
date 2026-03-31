@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     }));
 
     loop {
-        let do_quit = rust_play.handle_keys()?;
+        let do_quit = rust_play.handle_events()?;
         if do_quit {
             break;
         }
