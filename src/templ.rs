@@ -4,6 +4,7 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::hash::Hash;
+use std::ops::Deref;
 
 #[derive(Clone, Debug, Default)]
 pub struct PlaceHolder {
@@ -15,15 +16,70 @@ pub struct PlaceHolder {
     pub color: u32,
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct ColorString(Vec<(char, u32, u32)>);
+
+impl ColorString {
+    pub fn new(s: &str) -> Self {
+        Self(s.chars().map(|c| (c, 0xff_ff_ff, 0)).collect())
+    }
+
+    pub fn as_string(&self) -> String {
+        self.0.iter().map(|(c, _, _)| c).collect()
+    }
+
+    /// Convert a byte offset (from the string representation) to a char index.
+    fn byte_to_char(&self, byte_offset: usize) -> usize {
+        let mut bytes = 0;
+        for (i, (c, _, _)) in self.0.iter().enumerate() {
+            if bytes >= byte_offset {
+                return i;
+            }
+            bytes += c.len_utf8();
+        }
+        self.0.len()
+    }
+
+    /// Replace a range specified by byte offsets (matching the string representation)
+    /// with new text using default colors.
+    pub fn replace_range_bytes(&mut self, byte_range: std::ops::Range<usize>, replacement: &str) {
+        let start = self.byte_to_char(byte_range.start);
+        let end = self.byte_to_char(byte_range.end);
+        let new_chars: Vec<(char, u32, u32)> =
+            replacement.chars().map(|c| (c, 0xff_ff_ff, 0)).collect();
+        self.0.splice(start..end, new_chars);
+    }
+
+    pub fn extend_spaces(&mut self, n: usize) {
+        self.0.extend(std::iter::repeat_n((' ', 0xff_ff_ff, 0), n));
+    }
+}
+
+impl Deref for ColorString {
+    type Target = Vec<(char, u32, u32)>;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Display for ColorString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (c, _, _) in &self.0 {
+            write!(f, "{c}")?;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct Template {
-    raw_lines: Vec<String>,
-    templ: Vec<String>,
+    raw_lines: Vec<ColorString>,
+    templ: Vec<ColorString>,
     data: HashMap<String, PlaceHolder>,
     re: Regex,
 }
 
-fn dup_lines(dup_indexes: &[usize], lines: &mut Vec<String>, h: usize) {
+fn dup_lines(dup_indexes: &[usize], lines: &mut Vec<ColorString>, h: usize) {
     // Duplicate lines until we reach target height
     if !dup_indexes.is_empty() {
         let s = (h - lines.len()) as f32 / dup_indexes.len() as f32;
@@ -41,14 +97,22 @@ fn dup_lines(dup_indexes: &[usize], lines: &mut Vec<String>, h: usize) {
 
 impl Template {
     fn as_string(&self) -> String {
-        self.templ.join("\n")
+        self.templ
+            .iter()
+            .map(|cs| cs.as_string())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     pub fn height(&self) -> usize {
         self.templ.len()
     }
 
-    pub fn lines(&self) -> &Vec<String> {
+    pub fn lines(&self) -> Vec<String> {
+        self.templ.iter().map(|cs| cs.as_string()).collect()
+    }
+
+    pub fn color_lines(&self) -> &Vec<ColorString> {
         &self.templ
     }
 
@@ -64,7 +128,7 @@ impl Template {
     }
 
     fn render<T: Display, Q: Hash + Eq + Borrow<str>>(&self, data: &HashMap<Q, T>) -> Vec<String> {
-        let mut result = self.templ.clone();
+        let mut result: Vec<String> = self.templ.iter().map(|cs| cs.as_string()).collect();
         for (key, val) in data {
             if let Some(ph) = self.data.get(key.borrow()) {
                 let line = &mut result[ph.line];
@@ -100,7 +164,8 @@ impl Template {
     /// hashmap
     ///
     pub fn new(templ: &str, w: usize, h: usize) -> Result<Template> {
-        let raw_lines: Vec<String> = templ.lines().map(|line| line.to_string()).collect();
+        let raw_lines: Vec<ColorString> =
+            templ.lines().map(|line| ColorString::new(line)).collect();
 
         let re = Regex::new(r"\$(((?<var>\w+)\s*)|>(?<char>.)|(?<fill>\^))")?;
 
@@ -116,54 +181,50 @@ impl Template {
     }
 
     pub fn draw(&mut self, w: usize, h: usize) {
-        let spaces = "                                                                   ";
         let maxl = w;
 
         let mut data = HashMap::<String, PlaceHolder>::new();
         let mut dup_indexes = Vec::new();
 
-        let max_len = self
-            .raw_lines
-            .iter()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap();
+        let max_len = self.raw_lines.iter().map(|l| l.len()).max().unwrap();
 
         // Find fill patterns ($> and $^), resize vertically and prepare for horizontal
         // Captures: var = var_name, char = char to repeat for '$>',
         // fill = '^' for line dup
-        let mut lines: Vec<String> = self
+        let mut lines: Vec<ColorString> = self
             .raw_lines
             .iter()
             .enumerate()
             .map(|(i, line)| {
-                let mut target = line.to_string();
-                for cap in self.re.captures_iter(line) {
+                let mut target = line.clone();
+                let line_str = line.as_string();
+                for cap in self.re.captures_iter(&line_str) {
                     let m = cap.get(0).unwrap();
                     if let Some(x) = cap.name("char") {
-                        let mut target_len = target.chars().count();
+                        let mut target_len = target.len();
                         if target_len < max_len {
                             let n = max_len - target_len;
-                            target.extend(std::iter::repeat_n(' ', n));
+                            target.extend_spaces(n);
                             target_len = max_len;
                         }
                         if w > target_len {
                             let len = (w - target_len) + 3;
                             let r = x.as_str().repeat(len);
-                            target.replace_range(m.start()..m.end(), &r);
+                            target.replace_range_bytes(m.start()..m.end(), &r);
                         } else {
                             let r = x.as_str().repeat(2);
-                            target.replace_range(m.start()..m.end(), &r);
+                            target.replace_range_bytes(m.start()..m.end(), &r);
                         }
                     }
                     if cap.name("fill").is_some() {
                         dup_indexes.push(i);
-                        target.replace_range(m.start()..m.end(), &spaces[0..(m.end() - m.start())]);
+                        let spaces = " ".repeat(m.end() - m.start());
+                        target.replace_range_bytes(m.start()..m.end(), &spaces);
                     }
                 }
-                let count = target.chars().count();
+                let count = target.len();
                 if count < maxl {
-                    target.extend(std::iter::repeat_n(' ', maxl - count));
+                    target.extend_spaces(maxl - count);
                 }
                 target
             })
@@ -175,12 +236,13 @@ impl Template {
 
         for (i, line) in lines.iter_mut().enumerate() {
             let mut clears = Vec::new();
-            for cap in self.re.captures_iter(line) {
+            let line_str = line.as_string();
+            for cap in self.re.captures_iter(&line_str) {
                 let m = cap.get(0).unwrap();
                 if let Some(x) = cap.name("var") {
                     let color: u32 = 0xff_ff_ff;
-                    let col = line[..m.start()].chars().count();
-                    let len = line[m.start()..m.end()].chars().count();
+                    let col = line_str[..m.start()].chars().count();
+                    let len = line_str[m.start()..m.end()].chars().count();
                     data.insert(
                         x.as_str().into(),
                         PlaceHolder {
@@ -196,7 +258,8 @@ impl Template {
                 }
             }
             for (start, end) in clears {
-                line.replace_range(start..end, &spaces[0..(end - start)]);
+                let spaces = " ".repeat(end - start);
+                line.replace_range_bytes(start..end, &spaces);
             }
         }
 
