@@ -620,21 +620,23 @@ impl RustPlay {
             if meta != "fft" && meta != "fft_at" {
                 log!("SONG-META {} = {}", meta, val);
             }
-            // Buffer FFT data with display timestamp for audio-sync
-            if meta == "fft_at"
+
+            if meta == "song_files"
+                && let Value::Files(files) = &val
+            {
+                self.state.song_files = files.clone();
+            } else if meta == "fft_at"
                 && let Value::Instant(at) = val
             {
                 next_fft_at = Some(at);
                 continue;
-            }
-            if meta == "fft"
+            } else if meta == "fft"
                 && let Value::Data(data) = val
             {
                 let display_at = next_fft_at.take().unwrap_or_else(Instant::now);
                 self.fft_queue.push_back((display_at, data));
                 continue;
-            }
-            if meta == "state"
+            } else if meta == "state"
                 && let Value::State(n) = val
             {
                 log!("state: {:?}", n);
@@ -644,14 +646,12 @@ impl RustPlay {
                     PlayState::Playing => self.media_sender.send(MediaKeyInfo::Playing)?,
                     _ => (),
                 }
-            }
-            if meta == "title"
+            } else if meta == "title"
                 && let Value::Text(title) = &val
             {
                 self.media_sender
                     .send(MediaKeyInfo::Title(title.to_string()))?
-            }
-            if meta == "composer"
+            } else if meta == "composer"
                 && let Value::Text(composer) = &val
                 && !composer.is_empty()
             {
@@ -769,7 +769,13 @@ impl RustPlay {
         if let Ok(entries) = fs::read_dir(favorites_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
-                if path.is_file() && path.extension().map(|e| e != "meta").unwrap_or(true) {
+                // TODO: HACK! we need to know which files are secondary for real
+                if path.is_file()
+                    && path
+                        .extension()
+                        .map(|e| e != "meta" && e != "smpl")
+                        .unwrap_or(true)
+                {
                     log!("{path:?}");
                     let file_info = SongIndexer::identify_song(&path);
                     songs.push(file_info);
@@ -785,7 +791,7 @@ impl RustPlay {
         }
         let mut song = self.current_playlist.get(self.current_song);
         let skip_tags: HashSet<&str> = [
-            "messages",
+            "message",
             "startSong",
             "len",
             "new",
@@ -851,8 +857,15 @@ impl RustPlay {
                 .push_back(Msg::Err(format!("Can't create favorites dir: {e}")));
             return;
         }
+
+        log!("FILES: {:?}", self.state.song_files);
+        let res = self.state.song_files.iter().try_for_each(|src| {
+            let dest = self.favorites_dir.join(src.file_name().unwrap_or_default());
+            fs::copy(src, &dest).map(|_| ())
+        });
+
         let dest = self.favorites_dir.join(file_name);
-        match fs::copy(src, &dest) {
+        match res {
             Ok(_) => {
                 self.state.info("Added to favorites");
                 let meta_path = dest.with_extension(format!(

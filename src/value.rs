@@ -1,5 +1,6 @@
 use core::fmt;
 use std::fmt::Display;
+use std::path::PathBuf;
 use std::time::Instant;
 
 use musix::MusicError;
@@ -14,6 +15,7 @@ pub(crate) enum Value {
     Error(MusicError),
     State(PlayState),
     Instant(Instant),
+    Files(Vec<PathBuf>),
     #[default]
     Unknown,
 }
@@ -28,6 +30,7 @@ impl Display for Value {
             Value::Instant(i) => write!(f, "{i:?}")?,
             Value::Unknown => write!(f, "???")?,
             Value::State(ps) => write!(f, "{ps:?}")?,
+            Value::Files(files) => write!(f, "{files:?}")?,
         }
         Ok(())
     }
@@ -66,6 +69,12 @@ impl From<&str> for Value {
 impl From<Vec<u8>> for Value {
     fn from(item: Vec<u8>) -> Self {
         Value::Data(item)
+    }
+}
+
+impl From<Vec<PathBuf>> for Value {
+    fn from(files: Vec<PathBuf>) -> Self {
+        Value::Files(files)
     }
 }
 

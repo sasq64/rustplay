@@ -1,4 +1,7 @@
-use std::collections::{HashMap, VecDeque};
+use std::{
+    collections::{HashMap, VecDeque},
+    path::PathBuf,
+};
 
 use crate::value::Value;
 
@@ -36,6 +39,7 @@ pub struct State {
     pub player_started: bool,
     pub width: i32,
     pub height: i32,
+    pub song_files: Vec<PathBuf>,
 }
 
 impl State {
@@ -81,7 +85,11 @@ impl State {
             Value::Error(ref e) => {
                 self.messages.push_back(Msg::Err((*e).to_string()));
             }
-            Value::State(_) | Value::Data(_) | Value::Instant(_) | Value::Unknown => {}
+            Value::Files(_)
+            | Value::State(_)
+            | Value::Data(_)
+            | Value::Instant(_)
+            | Value::Unknown => {}
         }
 
         self.meta.insert(meta.to_owned(), val);

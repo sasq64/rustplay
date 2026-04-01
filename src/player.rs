@@ -224,6 +224,11 @@ impl Player {
                     }
                 }
             }
+            if let Some(chip_player) = &self.chip_player {
+                let song_files = chip_player.get_song_files();
+                info_producer.push_value("song_files", song_files.clone())?;
+                log!("SONGS: {song_files:?}");
+            }
         }
         if let Some(chip_player) = &mut self.chip_player {
             while let Some(meta) = chip_player.get_changed_meta() {
@@ -369,7 +374,6 @@ fn run_audio_loop<B: AudioBackend>(
 
                 // Run FFT analysis on full buffers
                 let data = fft.run(&samples, playback_freq)?;
-                log!("{} {}", data.len(), samples.len());
                 // Compute total audio delay: ring buffer + device latency
                 let ring_delay_us =
                     audio_sink.occupied_len() as u64 * 1_000_000 / (playback_freq as u64 * 2);
