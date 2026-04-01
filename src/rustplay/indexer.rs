@@ -254,7 +254,8 @@ impl SongIndexer {
                                     .to_owned(),
                 self.parent_field => parent))?;
         if self.initial_songs.len() < INITIAL_SONG_COUNT {
-            self.initial_songs.push_back(cached.clone().into_file_info());
+            self.initial_songs
+                .push_back(cached.clone().into_file_info());
         }
         Ok(())
     }
@@ -393,6 +394,35 @@ impl SongIndexer {
         Ok(())
     }
 
+    fn doc_to_fileinfo(&self, doc: &TantivyDocument) -> Result<FileInfo> {
+        let path = get_string(doc, self.path_field)?;
+        let title = get_value(doc, self.title_field);
+        let composer = get_value(doc, self.composer_field);
+
+        let has_title = title.is_some();
+        let mut meta_data = HashMap::new();
+        if let Some(title) = title {
+            meta_data.insert("title".to_owned(), title);
+        }
+        if let Some(composer) = composer {
+            meta_data.insert("composer".to_owned(), composer);
+        }
+
+        Ok(if has_title {
+            FileInfo {
+                path: path.into(),
+                meta_data,
+                ..Default::default()
+            }
+        } else {
+            FileInfo {
+                path: path.into(),
+                file_type: FileType::Dir,
+                ..Default::default()
+            }
+        })
+    }
+
     pub fn search(&mut self, query: &str) -> Result<Vec<FileInfo>> {
         let searcher = self.reader.searcher();
         let mut query_parser =
@@ -404,23 +434,10 @@ impl SongIndexer {
         let mut result = Vec::new();
         for (_score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let path = get_string(&doc, self.path_field)?;
-            let title = get_value(&doc, self.title_field);
-            let composer = get_value(&doc, self.composer_field);
-
-            let mut meta_data = HashMap::new();
-            if let Some(title) = title {
-                meta_data.insert("title".to_owned(), title);
+            let file_info = self.doc_to_fileinfo(&doc)?;
+            if file_info.file_type == FileType::Song {
+                result.push(file_info);
             }
-            if let Some(composer) = composer {
-                meta_data.insert("composer".to_owned(), composer);
-            }
-
-            result.push(FileInfo {
-                path: path.into(),
-                meta_data,
-                ..Default::default()
-            });
         }
         Ok(result)
     }
@@ -435,23 +452,10 @@ impl SongIndexer {
         let mut result = Vec::new();
         for (_score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let path = get_string(&doc, self.path_field)?;
-            let title = get_value(&doc, self.title_field);
-            let composer = get_value(&doc, self.composer_field);
-
-            let mut meta_data = HashMap::new();
-            if let Some(title) = title {
-                meta_data.insert("title".to_owned(), title);
+            let file_info = self.doc_to_fileinfo(&doc)?;
+            if file_info.file_type == FileType::Song {
+                result.push(file_info);
             }
-            if let Some(composer) = composer {
-                meta_data.insert("composer".to_owned(), composer);
-            }
-
-            result.push(FileInfo {
-                path: path.into(),
-                meta_data,
-                ..Default::default()
-            });
         }
         Ok(())
     }
@@ -470,31 +474,11 @@ impl SongIndexer {
 
         for (_score, doc_address) in top_docs {
             let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let path: PathBuf = get_string(&doc, self.path_field)?.into();
-            let title = get_value(&doc, self.title_field);
-            let composer = get_value(&doc, self.composer_field);
-
-            let has_title = title.is_some();
-            let mut meta_data = HashMap::new();
-            if let Some(title) = title {
-                meta_data.insert("title".to_owned(), title);
-            }
-            if let Some(composer) = composer {
-                meta_data.insert("composer".to_owned(), composer);
-            }
-
-            if has_title {
-                songs.push(FileInfo {
-                    path,
-                    meta_data,
-                    ..Default::default()
-                });
+            let file_info = self.doc_to_fileinfo(&doc)?;
+            if file_info.file_type == FileType::Song {
+                songs.push(file_info);
             } else {
-                dirs.push(FileInfo {
-                    path,
-                    file_type: FileType::Dir,
-                    ..Default::default()
-                });
+                dirs.push(file_info);
             }
         }
 
