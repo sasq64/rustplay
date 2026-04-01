@@ -10,6 +10,8 @@ rust_play = RustPlay
 ---@param text string
 function log(text) end
 
+function play_pause() end
+
 function next_song() end
 
 function prev_song() end

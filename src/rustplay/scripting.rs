@@ -86,6 +86,10 @@ impl UserData for RustPlay {
             this.enter_or_play_selected().unwrap();
             Ok(())
         });
+        methods.add_method_mut("play_pause", |_, this: &mut RustPlay, ()| {
+            this.play_pause();
+            Ok(())
+        });
         methods.add_method_mut(
             "add_favorite",
             |_, this: &mut RustPlay, (song,): (LuaUserDataRef<FileInfo>,)| {
@@ -155,6 +159,7 @@ impl Script {
         )?;
 
         let prelude = r#"
+function play_pause() rust_play:play_pause() end
 function next_song() rust_play:next_song() end
 function prev_song() rust_play:prev_song() end
 function next_subtune() rust_play:next_subtune() end

@@ -1,6 +1,6 @@
 local function human_size(meta)
   local size = meta.size
-  if not size or size == 0 then return "" end
+  if not size or size == 0 then return "?" end
   if size < 1024 then
     return string.format("%dB", size)
   elseif size < 1024 * 1024 then
@@ -57,26 +57,26 @@ local vars = {
   count = { color = 0x808080 },
 }
 local keys
-if false then
+if true then
   keys = {
-    { "ns", ":letter:", function(x)
+    { "n", ":letter:", function(x)
       focus_search()
       add_char(x)
     end },
+    { "n", "Left",  prev_subtune },
+    { "n", "Right", next_subtune },
     { "r", "Enter", enter_or_play_selected },
     { "r", "Esc",   show_main },
+    { "n", "Space", play_pause },
     { "ni", "Up,Down,PageUp,PageDown", function(x)
       show_current()
       add_char(x)
     end },
-    { "n", "a", function()
+    { "n", "=", function()
       add_favorite(get_playing_song())
     end },
-    { "r", "a", function()
-      add_favorite(get_selected_song())
-    end },
     { "a", "ctrl-c",      quit },
-    { "n", "f,+,-",       show_favorites },
+    { "n", "ctrl-f,-",    show_favorites },
     { "n", "/",           show_directory },
     { "d", "/,BackSpace", goto_parent },
     { "a", "]",           next_song },
@@ -120,4 +120,5 @@ return {
   template = templ,
   vars = vars,
   keys = keys,
+  info = "[Any letter] = search, [-] = favorites, [=] = add favorite, [/] = Files"
 }
