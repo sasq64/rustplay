@@ -1,13 +1,17 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
-use std::io::{BufRead, Read};
+use std::hash::{Hash, Hasher};
+use std::io::{BufRead, BufWriter, Read};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::Receiver;
 use std::sync::{Arc, LazyLock, Mutex, MutexGuard, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, UNIX_EPOCH};
+
+use serde::{Deserialize, Serialize};
 
 use id3::{Tag, TagLike};
 use itertools::Itertools;
@@ -47,6 +51,114 @@ const INITIAL_SONG_COUNT: usize = 100;
 
 static MODLAND_FORMATS: LazyLock<HashSet<&'static str>> =
     LazyLock::new(|| include_str!("modland_formats.txt").lines().collect());
+
+// --- Directory cache types and utilities ---
+
+#[derive(Serialize, Deserialize)]
+enum CachedValue {
+    Text(String),
+    Number(f64),
+}
+
+impl From<&Value> for CachedValue {
+    fn from(v: &Value) -> Self {
+        match v {
+            Value::Text(s) => CachedValue::Text(s.clone()),
+            Value::Number(n) => CachedValue::Number(*n),
+            _ => CachedValue::Text(String::new()),
+        }
+    }
+}
+
+impl From<CachedValue> for Value {
+    fn from(v: CachedValue) -> Self {
+        match v {
+            CachedValue::Text(s) => Value::Text(s),
+            CachedValue::Number(n) => Value::Number(n),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct CachedFileInfo {
+    path: PathBuf,
+    meta_data: HashMap<String, CachedValue>,
+}
+
+impl From<&FileInfo> for CachedFileInfo {
+    fn from(fi: &FileInfo) -> Self {
+        CachedFileInfo {
+            path: fi.path.clone(),
+            meta_data: fi
+                .meta_data
+                .iter()
+                .map(|(k, v)| (k.clone(), CachedValue::from(v)))
+                .collect(),
+        }
+    }
+}
+
+impl From<CachedFileInfo> for FileInfo {
+    fn from(cf: CachedFileInfo) -> Self {
+        FileInfo {
+            path: cf.path,
+            meta_data: cf
+                .meta_data
+                .into_iter()
+                .map(|(k, v)| (k, Value::from(v)))
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct DirCache {
+    mtime_secs: u64,
+    mtime_nanos: u32,
+    files: Vec<CachedFileInfo>,
+}
+
+fn cache_base_dir() -> Option<PathBuf> {
+    let base = dirs::cache_dir()?.join("oldplay-data").join("index-cache");
+    std::fs::create_dir_all(&base).ok()?;
+    Some(base)
+}
+
+fn cache_file_for_dir(base: &Path, dir: &Path) -> PathBuf {
+    let mut hasher = DefaultHasher::new();
+    dir.hash(&mut hasher);
+    let hash = hasher.finish();
+    base.join(format!("{hash:016x}.json"))
+}
+
+fn dir_mtime(dir: &Path) -> Option<(u64, u32)> {
+    let md = std::fs::metadata(dir).ok()?;
+    let mtime = md.modified().ok()?;
+    let dur = mtime.duration_since(UNIX_EPOCH).ok()?;
+    Some((dur.as_secs(), dur.subsec_nanos()))
+}
+
+fn load_cache(base: &Path, dir: &Path) -> Option<DirCache> {
+    let path = cache_file_for_dir(base, dir);
+    let file = File::open(path).ok()?;
+    let cache: DirCache = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
+    let (secs, nanos) = dir_mtime(dir)?;
+    if cache.mtime_secs == secs && cache.mtime_nanos == nanos {
+        Some(cache)
+    } else {
+        None
+    }
+}
+
+fn save_cache(base: &Path, dir: &Path, cache: &DirCache) {
+    let path = cache_file_for_dir(base, dir);
+    if let Ok(file) = File::create(path) {
+        let _ = serde_json::to_writer(BufWriter::new(file), cache);
+    }
+}
+
+// --- End cache utilities ---
 
 /// A Tantivy indexer that indexes song files.
 pub struct SongIndexer {
@@ -402,59 +514,6 @@ impl SongIndexer {
         dirs.append(&mut songs);
         Ok(dirs)
     }
-
-    pub fn browse_old(&self, dir: &Path) -> Result<Vec<FileInfo>> {
-        let searcher = self.reader.searcher();
-        let top_docs = searcher.search(&AllQuery, &TopDocs::with_limit(1_000_000))?;
-
-        let dir_str = dir.to_str().context("Illegal dir path")?;
-        let mut subdirs: HashSet<PathBuf> = HashSet::new();
-        let mut entries: Vec<FileInfo> = Vec::new();
-
-        for (_score, doc_address) in top_docs {
-            let doc: TantivyDocument = searcher.doc(doc_address)?;
-            let parent = get_string(&doc, self.parent_field)?;
-
-            if parent == dir_str {
-                let path = get_string(&doc, self.path_field)?;
-                let title = get_value(&doc, self.title_field);
-                let composer = get_value(&doc, self.composer_field);
-                let mut meta_data = HashMap::new();
-                if let Some(title) = title {
-                    meta_data.insert("title".to_owned(), title);
-                }
-                if let Some(composer) = composer {
-                    meta_data.insert("composer".to_owned(), composer);
-                }
-                entries.push(FileInfo {
-                    path: path.into(),
-                    meta_data,
-                    ..Default::default()
-                });
-            } else if let Some(rest) = parent.strip_prefix(dir_str) {
-                let rest = rest.trim_start_matches('/');
-                if !rest.is_empty()
-                    && let Some(child) = rest.split('/').next()
-                {
-                    subdirs.insert(dir.join(child));
-                }
-            }
-        }
-
-        let mut dir_entries: Vec<FileInfo> = subdirs
-            .into_iter()
-            .map(|path| FileInfo {
-                path,
-                file_type: FileType::Dir,
-                ..Default::default()
-            })
-            .collect();
-        dir_entries.sort_by(|a, b| a.path.cmp(&b.path));
-        entries.sort_by(|a, b| a.path.cmp(&b.path));
-        dir_entries.append(&mut entries);
-
-        Ok(dir_entries)
-    }
 }
 
 pub struct IndexedSongs {
@@ -519,12 +578,10 @@ impl RemoteSongIndexer {
         working: &Arc<AtomicBool>,
         rx: &Receiver<Cmd>,
     ) -> Result<()> {
-        let non_songs: HashSet<String> = [
+        let non_songs: HashSet<&str> = [
             "d71", "d81", "dfi", "d64", "1st", "exe", "hvs", "txt", "faq", "md5",
         ]
-        .into_iter()
-        .map(str::to_string)
-        .collect();
+        .into();
 
         #[allow(clippy::unwrap_used)]
         let lock = || indexer.lock().unwrap();
@@ -537,27 +594,64 @@ impl RemoteSongIndexer {
                 }
                 Cmd::AddPath(path) => {
                     let mut now = Instant::now();
+                    let cache_base = cache_base_dir();
                     working.store(true, Ordering::Relaxed);
-                    for entry in WalkDir::new(path) {
+
+                    // With contents_first(true), all files in a directory are
+                    // yielded before the directory entry itself.
+                    let mut pending_files: Vec<walkdir::DirEntry> = Vec::new();
+
+                    for entry in WalkDir::new(path).contents_first(true) {
                         if !working.load(Ordering::Relaxed) {
                             break;
                         }
                         let p = entry?;
 
                         if p.file_type().is_dir() {
+                            if let Some(ref base) = cache_base
+                                && let Some(cached) = load_cache(base, p.path())
+                            {
+                                // Cache hit: use cached file infos
+                                for cf in cached.files {
+                                    let file_info: FileInfo = cf.into();
+                                    lock().add_song(&file_info)?;
+                                }
+                            } else {
+                                // Cache miss: identify songs and save cache
+                                let mut cache_entries = Vec::new();
+                                for file_entry in pending_files.drain(..) {
+                                    if let Some(ext) = file_entry.path().extension() {
+                                        let ext = ext.to_string_lossy().to_lowercase();
+                                        if non_songs.contains(ext.as_str()) {
+                                            continue;
+                                        }
+                                    }
+                                    if file_entry.file_type().is_file()
+                                        && musix::can_handle(file_entry.path())?
+                                    {
+                                        let file_info =
+                                            SongIndexer::identify_song(file_entry.path());
+                                        lock().add_song(&file_info)?;
+                                        cache_entries.push(CachedFileInfo::from(&file_info));
+                                    }
+                                }
+                                if let Some(ref base) = cache_base
+                                    && let Some((secs, nanos)) = dir_mtime(p.path())
+                                {
+                                    let cache = DirCache {
+                                        mtime_secs: secs,
+                                        mtime_nanos: nanos,
+                                        files: cache_entries,
+                                    };
+                                    save_cache(base, p.path(), &cache);
+                                }
+                            }
+                            pending_files.clear();
                             lock().add_dir(p.path())?;
+                        } else {
+                            pending_files.push(p);
                         }
 
-                        if let Some(ext) = p.path().extension() {
-                            let ext = ext.to_string_lossy().to_lowercase();
-                            if non_songs.contains(&ext) {
-                                continue;
-                            }
-                        }
-                        if p.file_type().is_file() && musix::can_handle(p.path())? {
-                            let file_info = SongIndexer::identify_song(p.path());
-                            lock().add_song(&file_info)?;
-                        }
                         if now.elapsed() > Duration::from_millis(1000) {
                             lock().commit()?;
                             now += Duration::from_millis(1000);

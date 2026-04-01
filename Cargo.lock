@@ -1732,6 +1732,8 @@ dependencies = [
  "regex",
  "ringbuf",
  "rubato",
+ "serde",
+ "serde_json",
  "spectrum-analyzer",
  "tantivy",
  "tokio",
