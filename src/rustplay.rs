@@ -99,11 +99,11 @@ impl RustPlay {
 
         let (w, h) = terminal::size()?;
 
-        let script_path = PathBuf::from("init.lua");
+        let script_path = PathBuf::from("config.lua");
         let script = if script_path.is_file() {
             std::fs::read_to_string(&script_path)?
         } else {
-            include_str!("../init.lua").to_string()
+            include_str!("../config.lua").to_string()
         };
         let scripting = Script::new(script).unwrap();
 
