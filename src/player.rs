@@ -202,6 +202,9 @@ impl Player {
             info_producer.push_value("songs", 1)?;
             self.song = 0;
             self.songs = 1;
+            if let Ok(md) = std::fs::metadata(&new_song) {
+                info_producer.push_value("size", md.len() as i32)?;
+            }
             if let Some(ext) = new_song.extension()
                 && ext == "mp3"
             {
