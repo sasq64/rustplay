@@ -1,5 +1,7 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
+use std::hash::{Hash, Hasher};
 use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -53,58 +55,24 @@ static MODLAND_FORMATS: LazyLock<HashSet<&'static str>> =
 // --- Directory cache types and utilities ---
 
 #[derive(Serialize, Deserialize, Clone)]
-enum CachedValue {
-    Text(String),
-    Number(f64),
-}
-
-#[derive(Serialize, Deserialize, Clone)]
 struct CachedFileInfo {
     path: PathBuf,
     title: String,
     composer: String,
-    meta_data: Vec<(String, CachedValue)>,
 }
 
 impl CachedFileInfo {
     fn from_file_info(fi: &FileInfo) -> Self {
-        let title = fi.get_title().to_owned();
-        let composer = fi.get("composer").to_string();
-        let meta_data = fi
-            .meta_data
-            .iter()
-            .map(|(k, v)| {
-                let cv = match v {
-                    Value::Text(s) => CachedValue::Text(s.clone()),
-                    Value::Number(n) => CachedValue::Number(*n),
-                    _ => CachedValue::Text(String::new()),
-                };
-                (k.clone(), cv)
-            })
-            .collect();
         CachedFileInfo {
             path: fi.path.clone(),
-            title,
-            composer,
-            meta_data,
+            title: fi.get_title().to_owned(),
+            composer: fi.get("composer").to_string(),
         }
     }
 
     fn into_file_info(self) -> FileInfo {
-        let meta_data = self
-            .meta_data
-            .into_iter()
-            .map(|(k, v)| {
-                let val = match v {
-                    CachedValue::Text(s) => Value::Text(s),
-                    CachedValue::Number(n) => Value::Number(n),
-                };
-                (k, val)
-            })
-            .collect();
         FileInfo {
             path: self.path,
-            meta_data,
             ..Default::default()
         }
     }
@@ -124,12 +92,10 @@ fn cache_base_dir() -> Option<PathBuf> {
 }
 
 fn cache_file_for_dir(base: &Path, dir: &Path) -> PathBuf {
-    let dir_str = dir.to_string_lossy();
-    // Simple hash: sum of bytes with mixing to avoid collisions
-    let hash: u64 = dir_str.bytes().fold(0u64, |h, b| {
-        h.wrapping_mul(31).wrapping_add(b as u64)
-    });
-    base.join(format!("{hash:016x}.bin"))
+    let abs = dir.canonicalize().unwrap_or_else(|_| dir.to_owned());
+    let mut hasher = DefaultHasher::new();
+    abs.hash(&mut hasher);
+    base.join(format!("{:016x}.bin", hasher.finish()))
 }
 
 fn dir_mtime(dir: &Path) -> Option<(u64, u32)> {
