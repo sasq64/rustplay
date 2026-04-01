@@ -1,8 +1,6 @@
-use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
-use std::hash::{Hash, Hasher};
-use std::io::{BufRead, BufWriter, Read};
+use std::io::{BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -54,59 +52,59 @@ static MODLAND_FORMATS: LazyLock<HashSet<&'static str>> =
 
 // --- Directory cache types and utilities ---
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 enum CachedValue {
     Text(String),
     Number(f64),
 }
 
-impl From<&Value> for CachedValue {
-    fn from(v: &Value) -> Self {
-        match v {
-            Value::Text(s) => CachedValue::Text(s.clone()),
-            Value::Number(n) => CachedValue::Number(*n),
-            _ => CachedValue::Text(String::new()),
-        }
-    }
-}
-
-impl From<CachedValue> for Value {
-    fn from(v: CachedValue) -> Self {
-        match v {
-            CachedValue::Text(s) => Value::Text(s),
-            CachedValue::Number(n) => Value::Number(n),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 struct CachedFileInfo {
     path: PathBuf,
-    meta_data: HashMap<String, CachedValue>,
+    title: String,
+    composer: String,
+    meta_data: Vec<(String, CachedValue)>,
 }
 
-impl From<&FileInfo> for CachedFileInfo {
-    fn from(fi: &FileInfo) -> Self {
+impl CachedFileInfo {
+    fn from_file_info(fi: &FileInfo) -> Self {
+        let title = fi.get_title().to_owned();
+        let composer = fi.get("composer").to_string();
+        let meta_data = fi
+            .meta_data
+            .iter()
+            .map(|(k, v)| {
+                let cv = match v {
+                    Value::Text(s) => CachedValue::Text(s.clone()),
+                    Value::Number(n) => CachedValue::Number(*n),
+                    _ => CachedValue::Text(String::new()),
+                };
+                (k.clone(), cv)
+            })
+            .collect();
         CachedFileInfo {
             path: fi.path.clone(),
-            meta_data: fi
-                .meta_data
-                .iter()
-                .map(|(k, v)| (k.clone(), CachedValue::from(v)))
-                .collect(),
+            title,
+            composer,
+            meta_data,
         }
     }
-}
 
-impl From<CachedFileInfo> for FileInfo {
-    fn from(cf: CachedFileInfo) -> Self {
+    fn into_file_info(self) -> FileInfo {
+        let meta_data = self
+            .meta_data
+            .into_iter()
+            .map(|(k, v)| {
+                let val = match v {
+                    CachedValue::Text(s) => Value::Text(s),
+                    CachedValue::Number(n) => Value::Number(n),
+                };
+                (k, val)
+            })
+            .collect();
         FileInfo {
-            path: cf.path,
-            meta_data: cf
-                .meta_data
-                .into_iter()
-                .map(|(k, v)| (k, Value::from(v)))
-                .collect(),
+            path: self.path,
+            meta_data,
             ..Default::default()
         }
     }
@@ -126,10 +124,12 @@ fn cache_base_dir() -> Option<PathBuf> {
 }
 
 fn cache_file_for_dir(base: &Path, dir: &Path) -> PathBuf {
-    let mut hasher = DefaultHasher::new();
-    dir.hash(&mut hasher);
-    let hash = hasher.finish();
-    base.join(format!("{hash:016x}.json"))
+    let dir_str = dir.to_string_lossy();
+    // Simple hash: sum of bytes with mixing to avoid collisions
+    let hash: u64 = dir_str.bytes().fold(0u64, |h, b| {
+        h.wrapping_mul(31).wrapping_add(b as u64)
+    });
+    base.join(format!("{hash:016x}.bin"))
 }
 
 fn dir_mtime(dir: &Path) -> Option<(u64, u32)> {
@@ -141,8 +141,8 @@ fn dir_mtime(dir: &Path) -> Option<(u64, u32)> {
 
 fn load_cache(base: &Path, dir: &Path) -> Option<DirCache> {
     let path = cache_file_for_dir(base, dir);
-    let file = File::open(path).ok()?;
-    let cache: DirCache = serde_json::from_reader(std::io::BufReader::new(file)).ok()?;
+    let data = std::fs::read(path).ok()?;
+    let cache: DirCache = bincode::deserialize(&data).ok()?;
     let (secs, nanos) = dir_mtime(dir)?;
     if cache.mtime_secs == secs && cache.mtime_nanos == nanos {
         Some(cache)
@@ -153,8 +153,8 @@ fn load_cache(base: &Path, dir: &Path) -> Option<DirCache> {
 
 fn save_cache(base: &Path, dir: &Path, cache: &DirCache) {
     let path = cache_file_for_dir(base, dir);
-    if let Ok(file) = File::create(path) {
-        let _ = serde_json::to_writer(BufWriter::new(file), cache);
+    if let Ok(data) = bincode::serialize(cache) {
+        let _ = std::fs::write(path, data);
     }
 }
 
@@ -266,6 +266,29 @@ impl SongIndexer {
                 self.parent_field => parent))?;
         if self.initial_songs.len() < INITIAL_SONG_COUNT {
             self.initial_songs.push_back(file_info.clone());
+        }
+        Ok(())
+    }
+
+    fn add_cached_song(&mut self, cached: &CachedFileInfo) -> Result<()> {
+        let count = self.count.fetch_add(1, Ordering::Relaxed);
+        let parent = cached
+            .path
+            .parent()
+            .unwrap_or(Path::new(""))
+            .to_str()
+            .context("Illegal parent path")?
+            .to_owned();
+
+        self.index_writer.add_document(doc!(
+                self.title_field => cached.title.as_str(),
+                self.index_field => count as u64,
+                self.composer_field => cached.composer.as_str(),
+                self.path_field => cached.path.to_str().context("Illegal path")?
+                                    .to_owned(),
+                self.parent_field => parent))?;
+        if self.initial_songs.len() < INITIAL_SONG_COUNT {
+            self.initial_songs.push_back(cached.clone().into_file_info());
         }
         Ok(())
     }
@@ -611,10 +634,9 @@ impl RemoteSongIndexer {
                             if let Some(ref base) = cache_base
                                 && let Some(cached) = load_cache(base, p.path())
                             {
-                                // Cache hit: use cached file infos
-                                for cf in cached.files {
-                                    let file_info: FileInfo = cf.into();
-                                    lock().add_song(&file_info)?;
+                                // Cache hit: add directly to Tantivy
+                                for cf in &cached.files {
+                                    lock().add_cached_song(cf)?;
                                 }
                             } else {
                                 // Cache miss: identify songs and save cache
@@ -632,7 +654,8 @@ impl RemoteSongIndexer {
                                         let file_info =
                                             SongIndexer::identify_song(file_entry.path());
                                         lock().add_song(&file_info)?;
-                                        cache_entries.push(CachedFileInfo::from(&file_info));
+                                        cache_entries
+                                            .push(CachedFileInfo::from_file_info(&file_info));
                                     }
                                 }
                                 if let Some(ref base) = cache_base
