@@ -66,7 +66,7 @@ if true then
     { "n", "Left",  prev_subtune },
     { "n", "Right", next_subtune },
     { "r", "Enter", enter_or_play_selected },
-    { "r", "Esc",   show_main },
+    { "r", "Esc",   xshow_main },
     { "n", "Space", play_pause },
     { "ni", "Up,Down,PageUp,PageDown", function(x)
       show_current()
@@ -120,5 +120,16 @@ return {
   template = templ,
   vars = vars,
   keys = keys,
-  info = "[Any letter] = search, [-] = favorites, [=] = add favorite, [/] = Files"
+  info = "[Any letter] = search, [-] = favorites, [=] = add favorite, [/] = Files",
+  fft = {
+    min_freq = 40,
+    max_freq = 12000,
+    height = 5,
+    bar_count = 25,
+    bar_width = 2,
+    bar_gap = 1,
+    colors = { 0xf00040, 0x00ff40 }
+  }
+
+
 }
