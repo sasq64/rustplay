@@ -78,8 +78,7 @@ impl UserData for RustPlay {
             Ok(())
         });
         methods.add_method_mut("show_current", |_, this: &mut RustPlay, ()| {
-            this.show_current();
-            Ok(())
+            this.show_current().map_err(mlua::Error::external)
         });
         methods.add_method_mut("enter_or_play_selected", |_, this: &mut RustPlay, ()| {
             this.enter_or_play_selected().map_err(mlua::Error::external)
@@ -181,7 +180,7 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
         let mut variables = HashMap::<String, TemplateVar>::new();
         let mut keys = HashMap::<InputMode, HashMap<MappedKey, LuaFunction>>::new();
 
-        let modes: HashMap<char, InputMode> = [
+        let modes: HashMap<_, _> = [
             ('n', InputMode::Main),
             ('f', InputMode::FavScreen),
             ('d', InputMode::DirScreen),

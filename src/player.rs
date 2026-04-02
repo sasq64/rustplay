@@ -402,7 +402,7 @@ pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
     msec: Arc<AtomicUsize>,
     audio_delay_us: Arc<AtomicUsize>,
     backend: B,
-) -> Result<JoinHandle<()>> {
+) -> Result<JoinHandle<Result<()>>> {
     let fft = Fft {
         divider: args.fft_div * 2,
         min_freq: args.min_freq as f32,
@@ -412,25 +412,20 @@ pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
 
     let info_producer_error = info_producer.clone();
 
-    Ok(thread::spawn(move || {
-        let main = || -> Result<()> {
-            run_audio_loop(
-                fft,
-                info_producer,
-                cmd_consumer,
-                msec,
-                audio_delay_us,
-                backend,
-            )
-        };
-        if let Err(e) = main() {
-            // Try to send error info back to main thread before terminating
-            let _ = info_producer_error.send((
-                "fatal_error".to_owned(),
-                format!("Audio thread error: {}", e).into(),
-            ));
+    Ok(thread::spawn(move || -> Result<()> {
+        let result = run_audio_loop(
+            fft,
+            info_producer,
+            cmd_consumer,
+            msec,
+            audio_delay_us,
+            backend,
+        );
+        if let Err(ref e) = result {
             log!("Audio thread terminated with error: {}", e);
+            let _ = info_producer_error.send(("quit".to_owned(), Value::Number(1.0)));
         }
+        result
     }))
 }
 
@@ -486,9 +481,13 @@ mod tests {
         .unwrap();
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
-        let (key, _) = info_consumer.recv().unwrap();
-        assert_eq!(key, "quit");
-        player_thread.join().unwrap();
+        loop {
+            let (key, _) = info_consumer.recv().unwrap();
+            if key == "quit" {
+                break;
+            }
+        }
+        player_thread.join().unwrap().unwrap();
     }
 
     #[test]
@@ -517,9 +516,12 @@ mod tests {
         assert!(matches!(val, Value::Error(_)));
 
         cmd_producer.send(Box::new(move |p| p.quit())).unwrap();
-        let (key, _) = info_consumer.recv().unwrap();
-
-        assert_eq!(key, "quit");
-        player_thread.join().unwrap();
+        loop {
+            let (key, _) = info_consumer.recv().unwrap();
+            if key == "quit" {
+                break;
+            }
+        }
+        player_thread.join().unwrap().unwrap();
     }
 }

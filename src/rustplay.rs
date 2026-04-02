@@ -58,7 +58,7 @@ pub struct RustPlay {
     info_consumer: mpsc::Receiver<(String, Value)>,
     templ: Template,
     msec: Arc<AtomicUsize>,
-    player_thread: Option<JoinHandle<()>>,
+    player_thread: Option<JoinHandle<Result<()>>>,
     fft_pos: VisualizerPos,
     state: State,
     height: usize,
@@ -376,10 +376,15 @@ impl RustPlay {
         }
 
         let play_time = self.msec.load(Ordering::SeqCst);
-        let c = (play_time / 10) % 100;
-        let m = play_time / 60000;
-        let s = (play_time / 1000) % 60;
-        self.write_field("time", format!("{m:02}:{s:02}:{c:02}"))?;
+        self.write_field(
+            "time",
+            format!(
+                "{:02}:{:02}:{:02}",
+                play_time / 60000,
+                (play_time / 1000) % 60,
+                (play_time / 10) % 100,
+            ),
+        )?;
 
         if self.fft_pos != VisualizerPos::None {
             // Pop delayed FFT frames whose display time has arrived
@@ -509,11 +514,12 @@ impl RustPlay {
         self.state.quit = true;
     }
 
-    pub fn show_current(&mut self) {
+    pub fn show_current(&mut self) -> Result<()> {
         if self.current_menu == MenuId::Dir {
-            self.show_directory().unwrap();
+            self.show_directory()?;
         }
         self.state.mode = InputMode::ResultScreen;
+        Ok(())
     }
 
     pub fn show_favorites(&mut self) {
@@ -579,9 +585,7 @@ impl RustPlay {
     fn handle_key(&mut self, key: KeyEvent) -> Result<bool> {
         let mut scripting = self.scripting.take().unwrap();
         let mode = self.input_mode();
-        let handled_by_script = scripting
-            .handle_key(self, key.code, key.modifiers, mode)
-            .unwrap();
+        let handled_by_script = scripting.handle_key(self, key.code, key.modifiers, mode)?;
         self.scripting = Some(scripting);
         if handled_by_script {
             return Ok(self.state.quit);
@@ -622,7 +626,10 @@ impl RustPlay {
                 log!("SONG-META {} = {}", meta, val);
             }
 
-            if meta == "song_files"
+            if meta == "quit" {
+                self.state.quit = true;
+                continue;
+            } else if meta == "song_files"
                 && let Value::Files(files) = &val
             {
                 self.state.song_files = files.clone();
@@ -682,6 +689,9 @@ impl RustPlay {
     pub fn handle_events(&mut self) -> Result<bool> {
         if self.no_term {
             return Ok(false);
+        }
+        if self.state.quit {
+            return Ok(true);
         }
         if !event::poll(std::time::Duration::from_millis(40))? {
             return Ok(false);
@@ -892,10 +902,10 @@ impl RustPlay {
                         _ => {}
                     }
                 }
-                if !table.is_empty() {
-                    if let Ok(toml_str) = toml::to_string(&table) {
-                        let _ = fs::write(&meta_path, &toml_str);
-                    }
+                if !table.is_empty()
+                    && let Ok(toml_str) = toml::to_string(&table)
+                {
+                    let _ = fs::write(&meta_path, &toml_str);
                 }
             }
             Err(e) => self.state.error(format!("Failed to copy: {e}")),
@@ -914,20 +924,17 @@ impl RustPlay {
         if !self.no_term {
             RustPlay::restore_term()?;
         }
-        if self.cmd_producer.send(Box::new(Player::quit)).is_err() {
-            return Err(MusicError {
-                msg: "Quit failed".into(),
-            }
-            .into());
-        }
+        // Send quit command; if it fails, the thread already exited (possibly with an error)
+        let _ = self.cmd_producer.send(Box::new(Player::quit));
 
         // Shutdown media keys listener
         let _ = self.media_sender.send(MediaKeyInfo::Shutdown);
 
-        if let Some(t) = self.player_thread.take()
-            && let Err(err) = t.join()
-        {
-            panic::resume_unwind(err);
+        if let Some(t) = self.player_thread.take() {
+            match t.join() {
+                Ok(result) => result?,
+                Err(err) => panic::resume_unwind(err),
+            }
         }
         Ok(())
     }
