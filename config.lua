@@ -66,7 +66,7 @@ if true then
     { "n", "Left",  prev_subtune },
     { "n", "Right", next_subtune },
     { "r", "Enter", enter_or_play_selected },
-    { "r", "Esc",   xshow_main },
+    { "r", "Esc",   show_main },
     { "n", "Space", play_pause },
     { "ni", "Up,Down,PageUp,PageDown", function(x)
       show_current()

@@ -4,11 +4,11 @@ use std::{error::Error, panic, process, time::Duration};
 use oldplay::Args;
 use oldplay::RustPlay;
 
+use anyhow::Result;
+
 fn main() -> Result<(), Box<dyn Error>> {
     let orig_hook = panic::take_hook();
     let args = Args::parse();
-
-    let mut rust_play = RustPlay::new(args)?;
 
     panic::set_hook(Box::new(move |panic_info| {
         RustPlay::restore_term().expect("Could not restore terminal");
@@ -18,6 +18,15 @@ fn main() -> Result<(), Box<dyn Error>> {
         process::exit(1);
     }));
 
+    if let Err(e) = run_rustplay(args) {
+        RustPlay::restore_term().expect("Could not restore terminal");
+        eprintln!("Error: {e}");
+    };
+    Ok(())
+}
+
+fn run_rustplay(args: Args) -> Result<()> {
+    let mut rust_play = RustPlay::new(args)?;
     loop {
         let do_quit = rust_play.handle_events()?;
         if do_quit {

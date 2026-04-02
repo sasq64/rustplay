@@ -141,7 +141,7 @@ impl RustPlay {
         } else {
             for song in &args.songs {
                 if song.is_file() {
-                    start_dir = song.parent().unwrap().into();
+                    start_dir = song.parent().unwrap_or(Path::new("")).into();
                 } else {
                     start_dir = song.into();
                 }
@@ -215,7 +215,9 @@ impl RustPlay {
         })
     }
     fn current_menu(&mut self) -> &mut gui::SongMenu {
-        self.menus.get_mut(&self.current_menu).unwrap()
+        self.menus
+            .get_mut(&self.current_menu)
+            .expect("Menu should exist")
     }
 
     fn get_menu(&mut self, id: &MenuId) -> &mut gui::SongMenu {
@@ -277,9 +279,8 @@ impl RustPlay {
         let overrides = self
             .scripting
             .as_mut()
-            .unwrap()
-            .get_overrides(&self.state.meta)
-            .unwrap();
+            .expect("scripting should exist")
+            .get_overrides(&self.state.meta)?;
 
         // TODO: Consider Rc<RefCell> to avoid full map clones below
 
@@ -352,7 +353,7 @@ impl RustPlay {
         if self.state.mode == InputMode::SearchInput {
             self.search_component.draw()?;
         } else {
-            let scripting = self.scripting.as_ref().unwrap();
+            let scripting = self.scripting.as_ref().expect("scripting should exist");
 
             let info: String = scripting.info.clone().unwrap_or(
                 "[s] = search, [f] = favorites, [a] = add favorite, [n] = next".to_string(),

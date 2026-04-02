@@ -1,3 +1,4 @@
+use anyhow::Result;
 use crokey::KeyCombinationFormat;
 use crossterm::event::KeyCode;
 use crossterm::event::KeyEvent;
@@ -6,7 +7,7 @@ use crossterm::event::KeyModifiers;
 use mlua::UserData;
 use mlua::UserDataMethods;
 use mlua::prelude::*;
-use std::{collections::HashMap, error::Error};
+use std::collections::HashMap;
 
 /// Script override for a variable in the template string
 #[derive(Default)]
@@ -55,8 +56,7 @@ impl UserData for RustPlay {
             Ok(())
         });
         methods.add_method_mut("goto_parent", |_, this: &mut RustPlay, ()| {
-            this.goto_parent().unwrap();
-            Ok(())
+            this.goto_parent().map_err(mlua::Error::external)
         });
         methods.add_method_mut("focus_search_edit", |_, this: &mut RustPlay, ()| {
             this.focus_search_edit();
@@ -71,8 +71,7 @@ impl UserData for RustPlay {
             Ok(())
         });
         methods.add_method_mut("show_directory", |_, this: &mut RustPlay, ()| {
-            this.show_directory().unwrap();
-            Ok(())
+            this.show_directory().map_err(mlua::Error::external)
         });
         methods.add_method_mut("show_favorites", |_, this: &mut RustPlay, ()| {
             this.show_favorites();
@@ -83,8 +82,7 @@ impl UserData for RustPlay {
             Ok(())
         });
         methods.add_method_mut("enter_or_play_selected", |_, this: &mut RustPlay, ()| {
-            this.enter_or_play_selected().unwrap();
-            Ok(())
+            this.enter_or_play_selected().map_err(mlua::Error::external)
         });
         methods.add_method_mut("play_pause", |_, this: &mut RustPlay, ()| {
             this.play_pause();
@@ -120,9 +118,8 @@ impl UserData for RustPlay {
             })
         });
         methods.add_method_mut("add_char", |_, this: &mut RustPlay, (s,): (String,)| {
-            let ke: KeyEvent = crokey::parse(&s).unwrap().into();
-            this.add_char(ke).unwrap();
-            Ok(())
+            let ke: KeyEvent = crokey::parse(&s).map_err(mlua::Error::external)?.into();
+            this.add_char(ke).map_err(mlua::Error::external)
         });
     }
 }
@@ -147,7 +144,7 @@ impl Script {
         self.template.clone()
     }
 
-    pub fn new(script: impl Into<String>) -> Result<Self, Box<dyn Error>> {
+    pub fn new(script: impl Into<String>) -> Result<Self> {
         let lua = Lua::new();
 
         lua.globals().set(
@@ -251,16 +248,20 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
 
                             let action = item.get::<mlua::Value>(3)?;
                             for c in mode.chars() {
-                                let input_mode = modes.get(&c).unwrap();
+                                let Some(input_mode) = modes.get(&c) else {
+                                    anyhow::bail!("config.lua: Key '{key}' has illegal mode '{c}'");
+                                };
                                 match &action {
                                     mlua::Value::Function(f) => {
                                         keys.get_mut(input_mode)
-                                            .unwrap()
+                                            .expect("All mode maps should exist")
                                             .insert(mk.clone(), f.clone());
                                     }
                                     _ => {
-                                        return Error("Error: {:?} is not a function", action);
-                                        std::process::exit(1);
+                                        anyhow::bail!(
+                                            "config.lua: Key action '{key}' maps to {:?}",
+                                            action
+                                        );
                                     }
                                 }
                             }
@@ -287,7 +288,7 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
         code: KeyCode,
         modifiers: KeyModifiers,
         mode: InputMode,
-    ) -> Result<bool, Box<dyn Error>> {
+    ) -> Result<bool> {
         let fmt = KeyCombinationFormat::default();
         let ke = KeyEvent {
             code,
@@ -313,13 +314,13 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
             }
         };
 
-        let keys = self.keys.get(&mode).unwrap();
+        let keys = self.keys.get(&mode).expect("All mode maps should exists");
         for mapped_key in mapped_keys.into_iter() {
             if let Some(f) = keys.get(&mapped_key) {
                 let _ = self.lua.scope(|scope| {
                     let ud = scope.create_userdata_ref_mut(rust_play)?;
                     self.lua.globals().set("rust_play", ud)?;
-                    Ok(f.call::<bool>((text.clone(),)).unwrap())
+                    f.call::<bool>((text.clone(),))
                 })?;
                 return Ok(true);
             }
@@ -331,7 +332,7 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
     pub fn get_overrides(
         &self,
         meta: &HashMap<String, Value>,
-    ) -> Result<HashMap<String, Override>, Box<dyn Error>> {
+    ) -> Result<HashMap<String, Override>> {
         let mut result = HashMap::new();
 
         let lua_meta = self.lua.create_table()?;
