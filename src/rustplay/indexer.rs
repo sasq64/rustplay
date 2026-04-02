@@ -19,7 +19,7 @@ use musix::SongInfo;
 use std::ops::Bound;
 use tantivy::Term;
 use tantivy::collector::TopDocs;
-use tantivy::query::{AllQuery, QueryParser, RangeQuery, TermQuery};
+use tantivy::query::{QueryParser, RangeQuery, TermQuery};
 use tantivy::schema::IndexRecordOption;
 
 use anyhow::Context;

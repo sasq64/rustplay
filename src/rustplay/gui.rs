@@ -9,10 +9,10 @@ use crossterm::{
     terminal::{Clear, ClearType},
 };
 use std::{
-    collections::{HashMap, VecDeque},
+    collections::HashMap,
     io::{Write, stdout},
 };
-use std::{hash::Hash, rc::Rc};
+use std::rc::Rc;
 
 // SONG MENU
 

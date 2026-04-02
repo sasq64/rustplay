@@ -21,7 +21,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if let Err(e) = run_rustplay(args) {
         RustPlay::restore_term().expect("Could not restore terminal");
         eprintln!("Error: {e}");
-    };
+    }
     Ok(())
 }
 

@@ -1,12 +1,11 @@
 use spectrum_analyzer::FrequencySpectrum;
 use spectrum_analyzer::{
-    FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10, windows::hann_window,
+    FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10,
 };
 
 use anyhow::Result;
 use anyhow::anyhow;
 
-use crate::log;
 
 #[derive(Default)]
 pub(crate) struct Fft {
