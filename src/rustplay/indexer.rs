@@ -2,7 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
-use std::io::{BufRead, Read};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -365,18 +365,21 @@ impl SongIndexer {
                 .map(|e| e.to_string_lossy())
                 .unwrap_or_default()
         ));
-        if let Ok(file) = File::open(&meta_path) {
-            for line in std::io::BufReader::new(file).lines().map_while(Result::ok) {
-                if let Some((key, value)) = line.split_once('=') {
-                    if value.starts_with("\"") {
-                        let value = value.trim_start_matches('"').trim_end_matches('"');
-                        meta_data.insert(key.to_string(), Value::Text(value.into()));
-                    } else {
-                        meta_data.insert(
-                            key.to_string(),
-                            Value::Number(value.parse::<f64>().unwrap()),
-                        );
+        if let Ok(contents) = std::fs::read_to_string(&meta_path)
+            && let Ok(table) = contents.parse::<toml::Table>()
+        {
+            for (key, value) in table {
+                match value {
+                    toml::Value::String(s) => {
+                        meta_data.insert(key, Value::Text(s));
                     }
+                    toml::Value::Float(n) => {
+                        meta_data.insert(key, Value::Number(n));
+                    }
+                    toml::Value::Integer(n) => {
+                        meta_data.insert(key, Value::Number(n as f64));
+                    }
+                    _ => {}
                 }
             }
         }

@@ -24,6 +24,7 @@ id3 = "1.13.1"
 mp3-duration = "0.1.10"
 tantivy = "0.25.0"
 anyhow = "1.0"
+toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
 dirs = "6.0"
@@ -39,6 +40,10 @@ gag = "1.0"
 
 [profile.release]
 debug = true
-#lto = true
-#codegen-units = 1
-#strip = true
+
+[profile.final]
+debug = false
+inherits = "release"
+lto = true
+codegen-units = 1
+strip = true

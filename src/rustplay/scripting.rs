@@ -258,7 +258,10 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
                                             .unwrap()
                                             .insert(mk.clone(), f.clone());
                                     }
-                                    _ => panic!("Wrong type"),
+                                    _ => {
+                                        return Error("Error: {:?} is not a function", action);
+                                        std::process::exit(1);
+                                    }
                                 }
                             }
                         }

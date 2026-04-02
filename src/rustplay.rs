@@ -105,7 +105,7 @@ impl RustPlay {
         } else {
             include_str!("../config.lua").to_string()
         };
-        let scripting = Script::new(script).unwrap();
+        let scripting = Script::new(script)?;
 
         let templ = Template::new(&scripting.get_template(), w as usize, 10)?;
         let scripting = Some(scripting);
@@ -791,13 +791,13 @@ impl RustPlay {
         }
         let mut song = self.current_playlist.get(self.current_song);
         let skip_tags: HashSet<&str> = [
-            "message",
+            // "message",
             "startSong",
             "len",
             "new",
             "isong",
             "next_song",
-            "file_name",
+            // "file_name",
         ]
         .into();
         for (key, value) in &self.state.meta {
@@ -874,18 +874,27 @@ impl RustPlay {
                         .map(|e| e.to_string_lossy())
                         .unwrap_or_default()
                 ));
-                let mut lines = String::new();
+                let mut table = toml::map::Map::new();
                 for (key, value) in &song.meta_data {
                     match value {
                         Value::Text(s) if !s.is_empty() => {
-                            lines.push_str(&format!("{key}=\"{s}\"\n"))
+                            table.insert(key.clone(), toml::Value::String(s.clone()));
                         }
-                        Value::Number(n) => lines.push_str(&format!("{key}={n}\n")),
+                        Value::Number(n) => {
+                            let int = *n as i64;
+                            if *n == int as f64 {
+                                table.insert(key.clone(), toml::Value::Integer(int));
+                            } else {
+                                table.insert(key.clone(), toml::Value::Float(*n));
+                            }
+                        }
                         _ => {}
                     }
                 }
-                if !lines.is_empty() {
-                    let _ = fs::write(&meta_path, &lines);
+                if !table.is_empty() {
+                    if let Ok(toml_str) = toml::to_string(&table) {
+                        let _ = fs::write(&meta_path, &toml_str);
+                    }
                 }
             }
             Err(e) => self.state.error(format!("Failed to copy: {e}")),

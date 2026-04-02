@@ -17,7 +17,7 @@
 
 - [ ] Random play
 - [x] Play/Pause
-- [ ] Size meta data
+- [x] Size meta data
 - [ ] Max errors, and show filename
 - [x] Favorites play list
 - [ ] Goto author
