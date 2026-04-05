@@ -1,6 +1,6 @@
 [package]
 name = "oldplay"
-version = "0.3.0"
+version = "0.3.1"
 authors = ["Jonas Minnberg <sasq64@gmail.com>"]
 edition = "2024"
 license = "MIT"
@@ -10,8 +10,8 @@ homepage = "https://github.com/sasq64/rustplay"
 [dependencies]
 walkdir = "2"
 crossterm = { version = "0.29.0", features = ["derive-more"] }
-# musix = "0.3.4"
-musix = { path = "../musicplayer/" }
+musix = "0.3.5"
+# musix = { path = "../musicplayer/" }
 rubato = "1.0.1"
 cpal = "0.17.3"
 ringbuf = "0.4.1"
