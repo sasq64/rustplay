@@ -1,11 +1,9 @@
 use spectrum_analyzer::FrequencySpectrum;
-use spectrum_analyzer::{
-    FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10,
-};
+use spectrum_analyzer::windows::hann_window;
+use spectrum_analyzer::{FrequencyLimit, samples_fft_to_spectrum, scaling::scale_20_times_log10};
 
 use anyhow::Result;
 use anyhow::anyhow;
-
 
 #[derive(Default)]
 pub(crate) struct Fft {
@@ -14,6 +12,10 @@ pub(crate) struct Fft {
     pub max_freq: f32,  // 4000
     pub bucket_bins: Vec<Vec<usize>>,
     pub peak: f32,
+    pub normalize: bool,
+    pub hann: bool,
+    pub a_weight: bool,
+    pub bucket_count: usize,
 }
 
 fn a_weight(freq: f32) -> f32 {
@@ -34,6 +36,10 @@ impl Fft {
         let log_min = min_freq.log10();
         let log_max = max_freq.log10();
         let log_step = (log_max - log_min) / num_buckets as f32;
+
+        // if self.a_weight {
+        //     self.normalize = true;
+        // }
 
         self.bucket_bins = (0..num_buckets)
             .map(|i| {
@@ -78,24 +84,28 @@ impl Fft {
             .bucket_bins
             .iter()
             .map(|bins| {
-                let center_freq = {
-                    let data = spectrum.data();
-                    let mid = bins[bins.len() / 2];
-                    data[mid].0.val()
-                };
                 let sum: f32 = bins.iter().map(|&i| data[i].1.val()).sum();
                 let avg = sum / bins.len() as f32;
-                let weight = a_weight(center_freq) / a_weight(1000.0);
-                avg * weight
+                if self.a_weight {
+                    let center_freq = {
+                        let data = spectrum.data();
+                        let mid = bins[bins.len() / 2];
+                        data[mid].0.val()
+                    };
+                    let weight = a_weight(center_freq) / a_weight(1000.0);
+                    return avg * weight;
+                }
+                avg
             })
             .collect();
 
-        let frame_max = values.iter().cloned().fold(0.0f32, f32::max);
-        self.peak = (self.peak * 0.95).max(frame_max); // 0.95 = decay rate, tune this
-
-        if self.peak > 0.0 {
-            for v in values.iter_mut() {
-                *v /= self.peak;
+        if self.normalize {
+            let frame_max = values.iter().cloned().fold(0.0f32, f32::max);
+            self.peak = (self.peak * 0.95).max(frame_max); // 0.95 = decay rate, tune this
+            if self.peak > 0.0 {
+                for v in values.iter_mut() {
+                    *v /= self.peak;
+                }
             }
         }
         values
@@ -110,9 +120,13 @@ impl Fft {
         let fft_size = mix.len().next_power_of_two();
         let mut padded = mix.clone();
         padded.resize(fft_size, 0.0);
-        //let window = hann_window(&padded);
+        let window = if self.hann {
+            hann_window(&padded)
+        } else {
+            padded
+        };
         let spectrum = samples_fft_to_spectrum(
-            &padded,
+            &window,
             freq,
             FrequencyLimit::Range(self.min_freq, self.max_freq),
             Some(&scale_20_times_log10),
@@ -120,18 +134,12 @@ impl Fft {
         .map_err(|e| anyhow!("FFT error: {:?}", e))?;
 
         if self.bucket_bins.is_empty() {
-            self.setup(&spectrum, 20);
+            self.setup(&spectrum, self.bucket_count);
         }
 
         let buckets = self.apply(&spectrum);
-
-        let data: Vec<u8> = buckets.iter().map(|j| ((j + 0.0) * 30.0) as u8).collect();
-
-        // let data: Vec<u8> = spectrum
-        //     .data()
-        //     .iter()
-        //     .map(|(_, j)| (j.val() * 0.75) as u8)
-        //     .collect();
+        let scale = if self.normalize { 200.0 } else { 6.0 };
+        let data: Vec<u8> = buckets.iter().map(|j| (j * scale) as u8).collect();
         Ok(data)
     }
 }

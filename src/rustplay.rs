@@ -2,8 +2,7 @@ use anyhow::Result;
 use crossterm::event::KeyEvent;
 use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
-use musix::MusicError;
-use scripting::Script;
+use scripting::Scripting;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
 use std::io::{self, Write as _, stdout};
@@ -14,7 +13,6 @@ use std::sync::{Arc, mpsc};
 use std::time::Instant;
 use std::{fs, panic, thread::JoinHandle};
 
-use crate::VisualizerPos;
 use crate::media_keys::{self, MediaKeyEvent, MediaKeyInfo};
 use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
 use crate::rustplay::gui::MenuNav;
@@ -23,7 +21,7 @@ use crate::rustplay::state::Msg;
 use crate::templ::Template;
 use crate::utils::{extract_zip, make_color};
 use crate::value::Value;
-use crate::{Args, log};
+use crate::{Args, CONFIG_LUA, FFtSettings, Settings, log};
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode},
@@ -59,7 +57,6 @@ pub struct RustPlay {
     templ: Template,
     msec: Arc<AtomicUsize>,
     player_thread: Option<JoinHandle<Result<()>>>,
-    fft_pos: VisualizerPos,
     state: State,
     height: usize,
     no_term: bool,
@@ -71,7 +68,7 @@ pub struct RustPlay {
     fft_queue: VecDeque<(Instant, Vec<u8>)>,
     current_playlist: Rc<dyn SongCollection>,
     current_song: usize,
-    scripting: Option<Script>,
+    scripting: Option<Scripting>,
     media_keys_receiver: mpsc::Receiver<MediaKeyEvent>,
     media_sender: mpsc::Sender<MediaKeyInfo>,
     favorites_dir: PathBuf,
@@ -99,13 +96,19 @@ impl RustPlay {
 
         let (w, h) = terminal::size()?;
 
-        let script_path = PathBuf::from("config.lua");
+        let script_path = dirs::config_dir()
+            .map(|d| d.join("oldplay"))
+            .unwrap_or_default()
+            .join("config.lua");
+
         let script = if script_path.is_file() {
             std::fs::read_to_string(&script_path)?
         } else {
-            include_str!("../config.lua").to_string()
+            CONFIG_LUA.to_string()
         };
-        let scripting = Script::new(script)?;
+        let scripting = Scripting::new(script)?;
+
+        let settings = scripting.get_settings();
 
         let templ = Template::new(&scripting.get_template(), w as usize, 10)?;
         let scripting = Some(scripting);
@@ -159,20 +162,31 @@ impl RustPlay {
 
         let (sx, sy) = templ.get_pos("search").unwrap_or((1, (th + 1) as u16));
 
+        let height = settings.fft.visualizer_height as i32;
+        let fft_component = gui::Fft {
+            data: Vec::new(),
+            use_color,
+            x,
+            y,
+            height,
+            bar_width: settings.fft.bar_width,
+            gap: settings.fft.bar_gap,
+            colors: gui::interpolate_colors(&settings.fft.colors, height as usize),
+        };
+
         Ok(RustPlay {
             cmd_producer,
             info_consumer,
             templ,
             msec: msec.clone(),
             player_thread: Some(crate::player::run_player(
-                &args,
+                &settings,
                 info_producer,
                 cmd_consumer,
                 msec,
                 audio_delay_us,
                 crate::player::CpalBackend,
             )?),
-            fft_pos: args.visualizer,
             state: State {
                 changed: true,
                 use_color: !args.no_color,
@@ -196,13 +210,7 @@ impl RustPlay {
             ]),
             current_menu: MenuId::Dir,
             search_component: gui::SearchField::new(sx, sy, use_color),
-            fft_component: gui::Fft {
-                data: Vec::new(),
-                use_color,
-                x,
-                y,
-                height: args.visualizer_height as i32,
-            },
+            fft_component,
             fft_queue: VecDeque::new(),
             current_playlist: current_list.clone(),
             current_song: 0,
@@ -386,19 +394,17 @@ impl RustPlay {
             ),
         )?;
 
-        if self.fft_pos != VisualizerPos::None {
-            // Pop delayed FFT frames whose display time has arrived
-            let now = Instant::now();
-            while let Some((display_at, _)) = self.fft_queue.front() {
-                if *display_at <= now {
-                    let (_, data) = self.fft_queue.pop_front().unwrap();
-                    self.fft_component.update(&data);
-                } else {
-                    break;
-                }
+        // Pop delayed FFT frames whose display time has arrived
+        let now = Instant::now();
+        while let Some((display_at, _)) = self.fft_queue.front() {
+            if *display_at <= now {
+                let (_, data) = self.fft_queue.pop_front().unwrap();
+                self.fft_component.update(&data);
+            } else {
+                break;
             }
-            self.fft_component.draw()?;
         }
+        self.fft_component.draw()?;
 
         if self.state.show_error > 0 {
             self.state.show_error -= 1;
@@ -752,7 +758,7 @@ impl RustPlay {
 
     pub fn prev_song(&mut self) {
         if !self.current_playlist.is_empty() {
-            if self.current_song > 1 {
+            if self.current_song > 0 {
                 self.current_song -= 1;
             }
             let song = self.current_playlist.get(self.current_song);

@@ -1,4 +1,6 @@
+use anyhow::Context;
 use clap::Parser;
+use oldplay::CONFIG_LUA;
 use std::{error::Error, panic, process, time::Duration};
 
 use oldplay::Args;
@@ -9,6 +11,14 @@ use anyhow::Result;
 fn main() -> Result<(), Box<dyn Error>> {
     let orig_hook = panic::take_hook();
     let args = Args::parse();
+
+    if args.write_config {
+        let config_dir = dirs::config_dir().context("No config dir available")?;
+        let out_path = config_dir.join("oldplay");
+        std::fs::create_dir_all(&out_path)?;
+        std::fs::write(out_path.join("config.lua"), CONFIG_LUA)?;
+        std::process::exit(0);
+    }
 
     panic::set_hook(Box::new(move |panic_info| {
         RustPlay::restore_term().expect("Could not restore terminal");

@@ -25,6 +25,7 @@ pub struct Override {
     pub value: Value,
 }
 
+use crate::Settings;
 use crate::rustplay::song::FileInfo;
 use crate::rustplay::state::InputMode;
 use crate::{RustPlay, log, value::Value};
@@ -130,15 +131,16 @@ enum MappedKey {
     Letter,
 }
 
-pub(crate) struct Script {
+pub(crate) struct Scripting {
     lua: Lua,
     template: String,
     variables: HashMap<String, TemplateVar>,
     keys: HashMap<InputMode, HashMap<MappedKey, LuaFunction>>,
     pub info: Option<String>,
+    pub settings: Option<Settings>,
 }
 
-impl Script {
+impl Scripting {
     pub fn get_template(&self) -> String {
         self.template.clone()
     }
@@ -176,6 +178,8 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
 "#;
         lua.load(prelude).exec()?;
 
+        let mut settings: Option<Settings> = None;
+
         let mut template = String::new();
         let mut variables = HashMap::<String, TemplateVar>::new();
         let mut keys = HashMap::<InputMode, HashMap<MappedKey, LuaFunction>>::new();
@@ -202,6 +206,9 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
                 _ => continue,
             };
             match key_str.as_str() {
+                "settings" => {
+                    settings = Some(lua.from_value::<Settings>(value)?);
+                }
                 "info" => {
                     info = Some(value.to_string()?.clone());
                 }
@@ -272,12 +279,13 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
             }
         }
 
-        Ok(Script {
+        Ok(Scripting {
             lua,
             template,
             variables,
             keys,
             info,
+            settings,
         })
     }
 
@@ -327,6 +335,10 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
         Ok(false)
     }
 
+    pub fn get_settings(&self) -> Settings {
+        self.settings.clone().unwrap_or_default()
+    }
+
     /// Ask the script for custom colors and values for metadata placeholders
     pub fn get_overrides(
         &self,
@@ -370,7 +382,7 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
 mod tests {
     use std::collections::HashMap;
 
-    use crate::{rustplay::scripting::Script, value::Value};
+    use crate::{rustplay::scripting::Scripting, value::Value};
 
     #[test]
     fn test_scripting() {
@@ -384,7 +396,7 @@ set_vars(vars)
 template("hello")
         "#;
 
-        let scripting = Script::new(script).unwrap();
+        let scripting = Scripting::new(script).unwrap();
         let templ = scripting.get_template();
         assert_eq!(templ, "hello");
         let meta = HashMap::from([("c".to_string(), Value::Text("hey".into()))]);

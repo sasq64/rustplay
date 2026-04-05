@@ -86,7 +86,7 @@ struct DirCache {
 }
 
 fn cache_base_dir() -> Option<PathBuf> {
-    let base = dirs::cache_dir()?.join("oldplay-data").join("index-cache");
+    let base = dirs::cache_dir()?.join("oldplay-index");
     std::fs::create_dir_all(&base).ok()?;
     Some(base)
 }

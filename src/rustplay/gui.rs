@@ -8,11 +8,11 @@ use crossterm::{
     style::{Color, Print, SetBackgroundColor, SetForegroundColor},
     terminal::{Clear, ClearType},
 };
+use std::rc::Rc;
 use std::{
     collections::HashMap,
     io::{Write, stdout},
 };
-use std::rc::Rc;
 
 // SONG MENU
 
@@ -397,6 +397,31 @@ impl SearchField {
     }
 }
 
+// Crate a target_count colors from source, by evenly distributing the source
+// colors in the new array an then interpolating the values in between.
+pub fn interpolate_colors(source: &[u32], target_count: usize) -> Vec<u32> {
+    if target_count == 0 || source.is_empty() {
+        return vec![];
+    }
+    if source.len() == 1 || target_count == 1 {
+        return vec![source[0]; target_count];
+    }
+    let mut result = vec![0u32; target_count];
+    for i in 0..target_count {
+        let pos = i as f64 * (source.len() - 1) as f64 / (target_count - 1) as f64;
+        let lo = pos as usize;
+        let hi = (lo + 1).min(source.len() - 1);
+        let t = pos - lo as f64;
+        let lerp = |shift: u32| -> u32 {
+            let a = (source[lo] >> shift) & 0xFF;
+            let b = (source[hi] >> shift) & 0xFF;
+            ((a as f64 * (1.0 - t) + b as f64 * t) + 0.5) as u32
+        };
+        result[i] = (lerp(16) << 16) | (lerp(8) << 8) | lerp(0);
+    }
+    result
+}
+
 #[derive(Default)]
 pub struct Fft {
     pub data: Vec<f32>,
@@ -404,18 +429,29 @@ pub struct Fft {
     pub use_color: bool,
     pub x: u16,
     pub y: u16,
+    pub bar_width: usize,
+    pub gap: usize,
+    pub colors: Vec<u32>,
 }
 
 impl Fft {
-    fn print_bars(bars: &[f32], target: &mut [char], w: usize, h: usize) {
+    fn print_bars(&self, target: &mut [char]) {
+        let gb = self.bar_width + self.gap;
+        let w = self.data.len() * gb;
+        let h = self.height as usize;
         const BARS: [char; 9] = ['█', '▇', '▆', '▅', '▄', '▃', '▂', '▁', ' '];
-        for x in 0..bars.len() {
-            let n = (bars[x] * (h as f32 / 5.0)) as i32;
+        //log!("{}", self.data[self.data.len() / 2]);
+        for x in 0..self.data.len() {
+            let n = (self.data[x] * (h as f32 / 25.0)) as i32;
             for y in 0..h {
                 let bar_char = BARS[(((h - y) * 8) as i32 - n).clamp(0, 8) as usize];
-                target[x * 3 + y * w] = bar_char;
-                target[x * 3 + 1 + y * w] = bar_char;
-                target[x * 3 + 2 + y * w] = ' ';
+                let xx = x * gb;
+                for j in xx..(xx + self.bar_width) {
+                    target[j + y * w] = bar_char;
+                }
+                for j in (xx + self.bar_width)..(xx + self.bar_width + self.gap) {
+                    target[j + y * w] = ' ';
+                }
             }
         }
     }
@@ -432,20 +468,23 @@ impl Fft {
     }
 
     pub fn draw(&self) -> Result<()> {
-        let w = self.data.len() * 3;
+        if self.data.is_empty() {
+            return Ok(());
+        }
+        let gb = self.bar_width + self.gap;
+        let w = self.data.len() * gb;
         let h = self.height as usize;
         let mut area: Vec<char> = vec![' '; w * h];
-        Fft::print_bars(&self.data, &mut area, w, h);
+        self.print_bars(&mut area);
         let mut out = stdout();
         for i in 0..h {
             out.queue(cursor::MoveTo(self.x, self.y + i as u16))?;
             if self.use_color {
-                let col: u8 = ((i * 255) / h) as u8;
-                out.queue(SetForegroundColor(Color::Rgb {
-                    r: 250 - col,
-                    g: col,
-                    b: 0x40,
-                }))?;
+                //let col: u8 = ((i * 255) / h);
+                let r = (self.colors[i] >> 16) as u8;
+                let g = ((self.colors[i] >> 8) & 0xff) as u8;
+                let b = ((self.colors[i]) & 0xff) as u8;
+                out.queue(SetForegroundColor(Color::Rgb { r, g, b }))?;
             }
             let offset = i * w;
             let line: String = area[offset..(offset + w)].iter().collect();

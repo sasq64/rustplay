@@ -1,4 +1,4 @@
-use crate::Args;
+use crate::{Args, Settings};
 use std::{
     io::{self, Read},
     path::{Path, PathBuf},
@@ -18,7 +18,7 @@ use ringbuf::{StaticRb, traits::*};
 
 use crate::{log, resampler::Resampler, value::Value};
 use anyhow::Result;
-use musix::{ChipPlayer, MusicError};
+use musix::MusicError;
 
 mod audio_device;
 mod cpal_device;
@@ -26,6 +26,8 @@ mod fft;
 
 use audio_device::{AudioCallback, AudioDevice};
 use cpal_device::setup_audio_device;
+
+use musix::MusixPlayer;
 
 pub(crate) trait AudioBackend {
     fn setup_audio_device(&self) -> Result<Box<dyn AudioDevice>>;
@@ -115,9 +117,9 @@ pub(crate) enum PlayState {
 // }
 
 // #[allow(clippy::struct_field_names)]
-#[derive(Default, Debug)]
+#[derive(Default)]
 pub(crate) struct Player {
-    chip_player: Option<ChipPlayer>,
+    chip_player: Option<Box<dyn MusixPlayer>>,
     song: i32,
     songs: i32,
     millis: Arc<AtomicUsize>,
@@ -396,7 +398,7 @@ fn run_audio_loop<B: AudioBackend>(
 }
 
 pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
-    args: &Args,
+    settings: &Settings,
     info_producer: mpsc::Sender<Info>,
     cmd_consumer: mpsc::Receiver<Cmd>,
     msec: Arc<AtomicUsize>,
@@ -404,9 +406,13 @@ pub(crate) fn run_player<B: AudioBackend + Send + 'static>(
     backend: B,
 ) -> Result<JoinHandle<Result<()>>> {
     let fft = Fft {
-        divider: args.fft_div * 2,
-        min_freq: args.min_freq as f32,
-        max_freq: args.max_freq as f32,
+        divider: 2,
+        min_freq: settings.fft.min_freq as f32,
+        max_freq: settings.fft.max_freq as f32,
+        bucket_count: settings.fft.bar_count,
+        a_weight: true,
+        hann: settings.fft.hann,
+        normalize: settings.fft.normalize,
         ..Default::default()
     };
 
@@ -438,6 +444,7 @@ mod tests {
     use std::sync::mpsc;
 
     use crate::Args;
+    use crate::Settings;
     use crate::value::Value;
 
     use super::Cmd;
@@ -466,7 +473,7 @@ mod tests {
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
         let audio_delay_us = Arc::new(AtomicUsize::new(0));
-        let args = Args { ..Args::default() };
+        let args = Settings::default(); //Args { ..Args::default() };
         let data = Path::new("data");
         musix::init(data).unwrap();
         let backend = super::NoSoundBackend {};

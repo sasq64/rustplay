@@ -58,10 +58,3 @@
 - [ ] Add colors to template
 - [ ] Parse json dur files for color data
 
-### SCRIPTABLE LOOK
-
-- [ ] RHAI functions as template variables
-
-### CODE STRUCTURE
-
-- [x] Refactor to main + lib

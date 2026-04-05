@@ -1,3 +1,9 @@
+-- Oldplay config file
+--
+
+-- Helper functions
+-- 
+
 local function human_size(meta)
   local size = meta.size
   if not size or size == 0 then return "?" end
@@ -29,7 +35,7 @@ local function title_and_composer(meta)
   return title .. composer
 end
 
-local templ = [[
+local template = [[
  ┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━$>━┳━━━━━━┓
  ┃ $title_and_composer                             $> ┃SIZE: ┃
  ┃ $sub_title                                      $> ┃$hs   ┃
@@ -39,6 +45,7 @@ local templ = [[
   NEXT: $next_song
 
 $search
+
  $fft
  .
  .
@@ -117,19 +124,19 @@ else
 end
 
 return {
-  template = templ,
+  template = template,
   vars = vars,
   keys = keys,
   info = "[Any letter] = search, [-] = favorites, [=] = add favorite, [/] = Files",
-  fft = {
-    min_freq = 40,
-    max_freq = 12000,
-    height = 5,
-    bar_count = 25,
-    bar_width = 2,
-    bar_gap = 1,
-    colors = { 0xf00040, 0x00ff40 }
+  settings = {
+    fft = {
+      min_freq = 40,
+      max_freq = 12000,
+      visualizer_height = 5,
+      bar_count = 25,
+      bar_width = 2,
+      bar_gap = 1,
+      colors = { 0xf00040, 0x00ff40 }
+    }
   }
-
-
 }

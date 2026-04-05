@@ -24,6 +24,7 @@ pub mod value;
 pub use rustplay::RustPlay;
 
 use clap::{Parser, ValueEnum};
+use serde::Deserialize;
 
 /// Log text to the '.rustplay.log' file
 ///
@@ -52,12 +53,40 @@ macro_rules! log {
     }};
 }
 
-#[derive(Default, ValueEnum, Clone, Copy, Debug, PartialEq)]
-pub enum VisualizerPos {
-    #[default]
-    None,
-    Right,
-    Below,
+#[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct FFtSettings {
+    min_freq: u32,
+    max_freq: u32,
+    visualizer_height: usize,
+    bar_width: usize,
+    bar_gap: usize,
+    bar_count: usize,
+    hann: bool,
+    normalize: bool,
+    colors: Vec<u32>,
+}
+impl Default for FFtSettings {
+    fn default() -> Self {
+        Self {
+            min_freq: 40,
+            max_freq: 12_1000,
+            visualizer_height: 5,
+            bar_width: 2,
+            bar_gap: 1,
+            bar_count: 25,
+            hann: true,
+            normalize: false,
+            colors: vec![0xff0040, 0x00ff40],
+        }
+    }
+}
+
+#[derive(Default, Debug, Deserialize, Clone)]
+#[serde(default)]
+pub struct Settings {
+    fft: FFtSettings,
+    no_color: bool,
 }
 
 #[derive(Default, Parser, Debug, Clone)]
@@ -65,25 +94,8 @@ pub enum VisualizerPos {
 pub struct Args {
     songs: Vec<PathBuf>,
 
-    #[arg(long, default_value_t = 40)]
-    /// Min frequency to show in visualizer
-    min_freq: u32,
-
-    #[arg(long, default_value_t = 12_000)]
-    /// Max frequency to show in visualizer
-    max_freq: u32,
-
-    #[arg(long, short = 'o', default_value = "below")]
-    /// Where to show the visualizer
-    visualizer: VisualizerPos,
-
-    #[arg(long, short = 'd', default_value_t = 1)]
-    // How much to divide FFT data
-    fft_div: usize,
-
-    #[arg(long, short = 'H', default_value_t = 5)]
-    // Height of visualizer in characters
-    visualizer_height: usize,
+    #[arg(long, default_value_t = false)]
+    pub write_config: bool,
 
     #[arg(long, default_value_t = false)]
     no_term: bool,
@@ -91,3 +103,5 @@ pub struct Args {
     #[arg(long, short = 'c', default_value_t = false)]
     no_color: bool,
 }
+
+pub const CONFIG_LUA: &str = include_str!("../config.lua");
