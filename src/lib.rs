@@ -23,7 +23,7 @@ pub mod value;
 
 pub use rustplay::RustPlay;
 
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 use serde::Deserialize;
 
 /// Log text to the '.rustplay.log' file
@@ -102,6 +102,9 @@ pub struct Args {
 
     #[arg(long, short = 'c', default_value_t = false)]
     no_color: bool,
+
+    #[arg(long, default_value_t = false)]
+    ignore_cache: bool,
 }
 
 pub const CONFIG_LUA: &str = include_str!("../config.lua");
