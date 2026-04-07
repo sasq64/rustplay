@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="hero">
+  <h1>Terminal music player <span class="accent">for retro formats</span></h1>
+  <p class="lede">A text-mode music player for esoteric (8/16-bit computers and consoles, etc.) and contemporary music formats. Runs on macOS and Linux.</p>
+</section>
+
+<section>
+  <h2>Features</h2>
+  <ul class="features">
+    <li>Plays SID, MOD, XM, IT, S3M, AHX, TFMX, FC, NSF, SPC, PSF, USF, FLAC, MP3 and many more</li>
+    <li>Scans files and directories passed on the command line</li>
+    <li>Built-in search — indexes MODLAND (400k songs) in seconds</li>
+    <li>Rainbow textmode music bars (FFT visualizer)</li>
+    <li>Configurable layout and key bindings via Lua</li>
+  </ul>
+</section>
+
+<section>
+  <h2>Install</h2>
+  <p>You'll need Rust and cargo — get them at <a href="https://rustup.rs">rustup.rs</a>.</p>
+  <p>Latest release:</p>
+  <pre><code>cargo install oldplay</code></pre>
+  <p>Development version:</p>
+  <pre><code>cargo install --git https://github.com/sasq64/rustplay --branch dev</code></pre>
+</section>
+
+<section>
+  <h2>Usage</h2>
+  <p>Point oldplay at a file or directory:</p>
+  <pre><code>oldplay ~/music</code></pre>
+  <p>See the <a href="{{ get_url(path='/doc/') }}">documentation</a> for keys, configuration and search syntax.</p>
+</section>
+{% endblock %}
