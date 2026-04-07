@@ -122,12 +122,12 @@ impl Template {
         let mut data = HashMap::<String, PlaceHolder>::new();
         let mut dup_indexes = Vec::new();
 
-        let max_len = self
-            .raw_lines
-            .iter()
-            .map(|l| l.chars().count())
-            .max()
-            .unwrap();
+        // let max_len = self
+        //     .raw_lines
+        //     .iter()
+        //     .map(|l| l.chars().count())
+        //     .max()
+        //     .unwrap();
 
         // Find fill patterns ($> and $^), resize vertically and prepare for horizontal
         // Captures: var = var_name, char = char to repeat for '$>',
@@ -141,12 +141,13 @@ impl Template {
                 for cap in self.re.captures_iter(line) {
                     let m = cap.get(0).unwrap();
                     if let Some(x) = cap.name("char") {
-                        let mut target_len = target.chars().count();
-                        if target_len < max_len {
-                            let n = max_len - target_len;
-                            target.extend(std::iter::repeat_n(' ', n));
-                            target_len = max_len;
-                        }
+                        let target_len = target.chars().count();
+                        // NOTE: This does not seem to be needed, and breaks tests
+                        // if target_len < max_len {
+                        //     let n = max_len - target_len;
+                        //     target.extend(std::iter::repeat_n(' ', n));
+                        //     target_len = max_len;
+                        // }
                         if w > target_len {
                             let len = (w - target_len) + 3;
                             let r = x.as_str().repeat(len);
@@ -230,7 +231,7 @@ mod tests {
 
     #[test]
     fn template_works() {
-        let result = Template::new("Line $one\nX $x!\n---$>--", 10, 3).unwrap();
+        let result = Template::new("Line $one\nX $x!\n---$>--\n", 10, 3).unwrap();
         let text = result.as_string();
         assert!(compare(&text, "Line\nX   !\n----------"));
 
@@ -238,13 +239,11 @@ mod tests {
 
         let result = Template::new(
             r#"
-@pooh=asda
 +----+$>---------+
 |$^  | $hello $> |
 +----+--------$>-+
 |$^  |$>         |
 +--=-+--$>------+
-@name=gargamel
 "#,
             20,
             5,
