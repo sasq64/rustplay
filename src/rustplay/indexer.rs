@@ -529,6 +529,7 @@ pub struct RemoteSongIndexer {
 #[derive(Debug, Clone, PartialEq)]
 enum Cmd {
     AddPath(PathBuf),
+    IgnoreCache(bool),
     Quit,
 }
 
@@ -562,9 +563,12 @@ impl RemoteSongIndexer {
         #[allow(clippy::unwrap_used)]
         let lock = || indexer.lock().unwrap();
 
+        let mut ignore_cache: bool = false;
+
         loop {
             let cmd = rx.recv()?;
             match cmd {
+                Cmd::IgnoreCache(ignore) => ignore_cache = ignore,
                 Cmd::Quit => {
                     break Ok(());
                 }
@@ -584,7 +588,8 @@ impl RemoteSongIndexer {
                         let p = entry?;
 
                         if p.file_type().is_dir() {
-                            if let Some(ref base) = cache_base
+                            if !ignore_cache
+                                && let Some(ref base) = cache_base
                                 && let Some(cached) = load_cache(base, p.path())
                             {
                                 // Cache hit: add directly to Tantivy
@@ -662,6 +667,11 @@ impl RemoteSongIndexer {
         })
     }
 
+    pub fn ignore_cache(&self, ignore: bool) -> Result<()> {
+        self.sender.send(Cmd::IgnoreCache(ignore))?;
+        Ok(())
+    }
+
     pub fn add_path(&self, path: &Path) -> Result<()> {
         self.is_working.store(true, Ordering::Relaxed);
         self.sender.send(Cmd::AddPath(path.to_owned()))?;
@@ -708,12 +718,12 @@ mod tests {
 
     use walkdir::WalkDir;
 
+    use crate::player::init_music;
     use crate::rustplay::indexer::RemoteSongIndexer;
     use crate::rustplay::song::{FileInfo, FileType};
 
     use super::SongIndexer;
 
-    #[test]
     fn identify_works() {
         let path: PathBuf = "music/C64/Ark_Pandora.sid".into();
         let info = SongIndexer::identify_song_internal(&path).unwrap().unwrap();
@@ -722,6 +732,7 @@ mod tests {
 
     #[test]
     fn normal_search_works() {
+        init_music();
         let mut indexer = SongIndexer::new().unwrap();
         let path: PathBuf = "music/C64/Ark_Pandora.sid".into();
         indexer.add_path(&path).unwrap();
@@ -797,11 +808,10 @@ mod tests {
 
     #[test]
     fn threaded_search_works() {
-        let data = Path::new("data");
-        assert!(data.is_dir());
-        musix::init(data).unwrap();
+        init_music();
         let mut indexer = RemoteSongIndexer::new().unwrap();
         let path: PathBuf = "music".into();
+        indexer.ignore_cache(true).unwrap();
         indexer.add_path(&path).unwrap();
         while indexer.working() {
             std::thread::sleep(std::time::Duration::from_millis(50));

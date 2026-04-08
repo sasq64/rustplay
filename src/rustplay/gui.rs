@@ -397,7 +397,7 @@ impl SearchField {
     }
 }
 
-// Crate a target_count colors from source, by evenly distributing the source
+// Create a target_count colors from source, by evenly distributing the source
 // colors in the new array an then interpolating the values in between.
 pub fn interpolate_colors(source: &[u32], target_count: usize) -> Vec<u32> {
     if target_count == 0 || source.is_empty() {
@@ -407,7 +407,7 @@ pub fn interpolate_colors(source: &[u32], target_count: usize) -> Vec<u32> {
         return vec![source[0]; target_count];
     }
     let mut result = vec![0u32; target_count];
-    for i in 0..target_count {
+    for (i, res) in result.iter_mut().enumerate() {
         let pos = i as f64 * (source.len() - 1) as f64 / (target_count - 1) as f64;
         let lo = pos as usize;
         let hi = (lo + 1).min(source.len() - 1);
@@ -417,7 +417,7 @@ pub fn interpolate_colors(source: &[u32], target_count: usize) -> Vec<u32> {
             let b = (source[hi] >> shift) & 0xFF;
             ((a as f64 * (1.0 - t) + b as f64 * t) + 0.5) as u32
         };
-        result[i] = (lerp(16) << 16) | (lerp(8) << 8) | lerp(0);
+        *res = (lerp(16) << 16) | (lerp(8) << 8) | lerp(0);
     }
     result
 }

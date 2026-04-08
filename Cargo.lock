@@ -1540,6 +1540,8 @@ checksum = "2195bf6aa996a481483b29d62a7663eed3fe39600c460e323f8ff41e90bdd89b"
 [[package]]
 name = "musix"
 version = "0.3.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "36af537215764cb058db72466ed952a2f357de0d73aa56ed57dcebb5a3d050e6"
 dependencies = [
  "cc",
  "claxon",
@@ -1743,7 +1745,7 @@ dependencies = [
 
 [[package]]
 name = "oldplay"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "audioadapter-buffers",

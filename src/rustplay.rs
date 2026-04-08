@@ -14,14 +14,14 @@ use std::time::Instant;
 use std::{fs, panic, thread::JoinHandle};
 
 use crate::media_keys::{self, MediaKeyEvent, MediaKeyInfo};
-use crate::player::{Cmd, Info, PlayResult, PlayState, Player};
+use crate::player::{Cmd, Info, PlayResult, PlayState, Player, init_music};
 use crate::rustplay::gui::MenuNav;
 use crate::rustplay::indexer::SongIndexer;
 use crate::rustplay::state::Msg;
 use crate::templ::Template;
-use crate::utils::{extract_zip, make_color};
+use crate::utils::make_color;
 use crate::value::Value;
-use crate::{Args, CONFIG_LUA, FFtSettings, Settings, log};
+use crate::{Args, CONFIG_LUA, log};
 use crossterm::{
     QueueableCommand, cursor,
     event::{self, Event, KeyCode},
@@ -118,20 +118,10 @@ impl RustPlay {
 
         let (x, y) = templ.get_pos("fft").unwrap_or((1, 9));
 
-        let data_dir = if let Some(cache_dir) = dirs::cache_dir() {
-            let dest_dir = cache_dir.join("oldplay-data");
-            if !dest_dir.exists() {
-                let data_zip = include_bytes!("oldplay.zip");
-                extract_zip(data_zip, &dest_dir)?;
-            }
-            dest_dir
-        } else {
-            dirs::home_dir().expect("User must have a home dir")
-        };
-
-        musix::init(&data_dir)?;
+        init_music();
 
         let indexer = RemoteSongIndexer::new()?;
+        indexer.ignore_cache(args.ignore_cache)?;
 
         let home_dir = dirs::home_dir().expect("User should have a home dir");
         let mut start_dir = home_dir.clone();

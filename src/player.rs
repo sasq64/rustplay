@@ -1,9 +1,9 @@
-use crate::{Args, Settings};
+use crate::{Settings, utils::extract_zip};
 use std::{
     io::{self, Read},
     path::{Path, PathBuf},
     sync::{
-        Arc,
+        Arc, Once,
         atomic::{AtomicUsize, Ordering},
         mpsc,
     },
@@ -102,6 +102,29 @@ pub(crate) enum PlayState {
     Playing,
     Paused,
     Quitting,
+}
+
+static INIT_MUSIC: Once = Once::new();
+
+fn _init_music() -> Result<()> {
+    let data_dir = if let Some(cache_dir) = dirs::cache_dir() {
+        let dest_dir = cache_dir.join("oldplay-data");
+        if !dest_dir.exists() {
+            let data_zip = include_bytes!("oldplay.zip");
+            extract_zip(data_zip, &dest_dir)?;
+        }
+        dest_dir
+    } else {
+        dirs::home_dir().expect("User must have a home dir")
+    };
+    musix::init(&data_dir)?;
+    Ok(())
+}
+
+pub fn init_music() {
+    INIT_MUSIC.call_once(|| {
+        _init_music().expect("Music can be initied");
+    });
 }
 
 // impl From<i32> for PlayState {
@@ -443,8 +466,8 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::sync::mpsc;
 
-    use crate::Args;
     use crate::Settings;
+    use crate::player::init_music;
     use crate::value::Value;
 
     use super::Cmd;
@@ -452,9 +475,7 @@ mod tests {
 
     #[test]
     fn musix_works() {
-        let data = Path::new("data");
-        assert!(data.is_dir());
-        musix::init(data).unwrap();
+        init_music();
         let mut chip_player = musix::load_song(Path::new("music.mod")).unwrap();
         let mut target = vec![0; 1024];
         let rc = chip_player.get_samples(&mut target);
@@ -466,6 +487,7 @@ mod tests {
 
     #[test]
     fn player_starts() {
+        init_music();
         // Send commands to player
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 
@@ -474,8 +496,6 @@ mod tests {
         let msec = Arc::new(AtomicUsize::new(0));
         let audio_delay_us = Arc::new(AtomicUsize::new(0));
         let args = Settings::default(); //Args { ..Args::default() };
-        let data = Path::new("data");
-        musix::init(data).unwrap();
         let backend = super::NoSoundBackend {};
         let player_thread = crate::player::run_player(
             &args,
@@ -499,17 +519,19 @@ mod tests {
 
     #[test]
     fn player_can_report_errors() {
+        init_music();
         let (cmd_producer, cmd_consumer) = mpsc::channel::<Cmd>();
 
         // Receive info from player
         let (info_producer, info_consumer) = mpsc::channel::<Info>();
         let msec = Arc::new(AtomicUsize::new(0));
         let audio_delay_us = Arc::new(AtomicUsize::new(0));
-        let args = Args { ..Args::default() };
-        musix::init(Path::new("data")).unwrap();
+        let settings = Settings {
+            ..Settings::default()
+        };
         let backend = super::NoSoundBackend {};
         let player_thread = crate::player::run_player(
-            &args,
+            &settings,
             info_producer,
             cmd_consumer,
             msec,

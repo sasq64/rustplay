@@ -392,8 +392,12 @@ local vars = {
   a = { alias = "one" },
   b = { color = 0xff8040 },
 }
-set_vars(vars)
-template("hello")
+return {
+    vars = vars,
+    template = "hello",
+    keys = {},
+    settings = {}
+}
         "#;
 
         let scripting = Scripting::new(script).unwrap();
