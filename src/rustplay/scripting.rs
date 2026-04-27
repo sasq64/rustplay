@@ -121,6 +121,13 @@ impl UserData for RustPlay {
             let ke: KeyEvent = crokey::parse(&s).map_err(mlua::Error::external)?.into();
             this.add_char(ke).map_err(mlua::Error::external)
         });
+        methods.add_method_mut(
+            "fast_forward",
+            |_, this: &mut RustPlay, (msec,): (usize,)| {
+                this.fast_forward(msec);
+                Ok(())
+            },
+        );
     }
 }
 
@@ -163,6 +170,7 @@ function prev_song() rust_play:prev_song() end
 function next_subtune() rust_play:next_subtune() end
 function prev_subtune() rust_play:prev_subtune() end
 function sub_song(n) rust_play:set_song(n) end
+function fast_forward(msec) rust_play:fast_forward(msec) end
 function goto_parent() rust_play:goto_parent() end
 function show_favorites() rust_play:show_favorites() end
 function show_directory() rust_play:show_directory() end
@@ -247,6 +255,8 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
                                 MappedKey::Digit
                             } else if key == ":letter:" {
                                 MappedKey::Letter
+                            } else if key == "Comma" {
+                                MappedKey::Code(KeyCode::Char(','), KeyModifiers::NONE)
                             } else {
                                 let ke: KeyEvent = crokey::parse(key)?.into();
                                 MappedKey::Code(ke.code, ke.modifiers)

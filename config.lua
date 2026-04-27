@@ -2,7 +2,7 @@
 --
 
 -- Helper functions
--- 
+--
 
 local function human_size(meta)
   local size = meta.size
@@ -82,12 +82,13 @@ if true then
     { "n", "=", function()
       add_favorite(get_playing_song())
     end },
-    { "a", "ctrl-c",      quit },
-    { "n", "ctrl-f,-",    show_favorites },
-    { "n", "/",           show_directory },
-    { "d", "/,BackSpace", goto_parent },
-    { "a", "]",           next_song },
-    { "a", "[",           prev_song },
+    { "a",  "ctrl-c",      quit },
+    { "nr", "ctrl-f,-",    show_favorites },
+    { "n",  "/",           show_directory },
+    { "d",  "/,BackSpace", goto_parent },
+    { "nr", "]",           next_song },
+    { "nr", "[",           prev_song },
+    { "nr", ".",           function() fast_forward(10000) end },
     { "n", ":digit:", function(c)
       sub_song(tonumber(c))
     end },

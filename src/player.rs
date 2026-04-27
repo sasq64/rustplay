@@ -127,19 +127,6 @@ pub fn init_music() {
     });
 }
 
-// impl From<i32> for PlayState {
-//     fn from(n: i32) -> Self {
-//         match n {
-//             0 => PlayState::Stopped,
-//             1 => PlayState::Playing,
-//             2 => PlayState::Paused,
-//             3 => PlayState::Quitting,
-//             _ => PlayState::Stopped,
-//         }
-//     }
-// }
-
-// #[allow(clippy::struct_field_names)]
 #[derive(Default)]
 pub(crate) struct Player {
     chip_player: Option<Box<dyn MusixPlayer>>,
@@ -156,7 +143,6 @@ impl Player {
         self.millis.store(0, Ordering::SeqCst);
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     pub fn next_song(&mut self) -> PlayResult {
         let cp = self.chip_player.as_ref().ok_or(MusicError {
             msg: "No active song".into(),
@@ -168,7 +154,6 @@ impl Player {
         Ok(true)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     pub fn prev_song(&mut self) -> PlayResult {
         if self.song > 0
             && let Some(cp) = &self.chip_player
@@ -179,7 +164,6 @@ impl Player {
         Ok(true)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     pub fn set_song(&mut self, song: i32) -> PlayResult {
         if let Some(cp) = &self.chip_player {
             self.song = song;
@@ -198,13 +182,11 @@ impl Player {
         Ok(true)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     pub fn ff(&mut self, msec: usize) -> PlayResult {
         self.ff_msec += msec;
         Ok(true)
     }
 
-    #[allow(clippy::unnecessary_wraps)]
     pub fn play_pause(&mut self) -> PlayResult {
         self.play_state = match self.play_state {
             PlayState::Paused => PlayState::Playing,

@@ -461,6 +461,10 @@ impl RustPlay {
         self.send_cmd(move |player| player.set_song(song as i32));
     }
 
+    fn fast_forward(&mut self, msec: usize) {
+        self.send_cmd(move |player| player.ff(msec));
+    }
+
     fn next_subtune(&mut self) {
         self.send_cmd(Player::next_song);
     }
