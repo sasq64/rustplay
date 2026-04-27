@@ -1,18 +1,11 @@
 use super::song::{FileInfo, SongArray, SongCollection};
-use crate::{log, term_extra::SetReverse};
-use anyhow::Result;
-use crossterm::{
-    QueueableCommand,
-    cursor::{self, MoveToNextLine},
-    event::{self, KeyCode},
-    style::{Color, Print, SetBackgroundColor, SetForegroundColor},
-    terminal::{Clear, ClearType},
-};
+use crate::log;
+use crossterm::event::{self, KeyCode};
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use std::collections::HashMap;
 use std::rc::Rc;
-use std::{
-    collections::HashMap,
-    io::{Write, stdout},
-};
 
 // SONG MENU
 
@@ -98,81 +91,61 @@ impl SongMenu {
 
     fn fade(&self, i: usize) -> Color {
         let x: u8 = (155 + self.fader[i] * 10) as u8;
-        Color::Rgb { r: x, g: x, b: x }
+        Color::Rgb(x, x, x)
     }
 
-    pub fn draw(&mut self) -> Result<()> {
+    pub fn render(&mut self, buf: &mut Buffer, _area: Rect) {
         if self.fader.len() != self.height {
             self.fader.resize(self.height, 0);
         }
-        let mut out = stdout();
 
-        let black = Color::Rgb { r: 0, g: 0, b: 0 };
-        let white = Color::Rgb {
-            r: 255,
-            g: 255,
-            b: 255,
-        };
+        let black = Color::Rgb(0, 0, 0);
+        let white = Color::Rgb(255, 255, 255);
 
-        if self.scrolled {
-            out.queue(Clear(ClearType::All))?;
-        }
-        if self.use_color {
-            out.queue(SetForegroundColor(white))?
-                .queue(SetBackgroundColor(Color::DarkRed))?
-                .queue(cursor::MoveTo(0, 0))?
-                .queue(Print(format!(
-                    "{}{:>width$}",
-                    &self.location,
-                    &self.info,
-                    width = self.width - self.location.len()
-                )))?
-                .queue(cursor::MoveTo(0, 1))?
-                .queue(SetBackgroundColor(black))?;
+        let header_text = format!(
+            "{}{:>width$}",
+            &self.location,
+            &self.info,
+            width = self.width.saturating_sub(self.location.len())
+        );
+        let header_style = if self.use_color {
+            Style::default().fg(white).bg(Color::Red)
         } else {
-            out.queue(cursor::MoveTo(0, 0))?
-                .queue(Print(format!(
-                    "{}{:>width$}",
-                    &self.location,
-                    &self.info,
-                    width = self.width - self.location.len()
-                )))?
-                .queue(cursor::MoveTo(0, 1))?;
-        }
+            Style::default()
+        };
+        buf.set_stringn(0, 0, &header_text, self.width, header_style);
+
         let start = self.start_pos;
         let end = (start + self.height).clamp(start, self.songs.len());
         let songs = &self.songs.get_range(start, end);
+
         if self.use_color {
+            // Mark selected row in the fader so it stays brightest
             self.fader[self.selected - self.start_pos] = 10;
             for (i, song) in songs.iter().enumerate() {
                 let name = song.full_song_name();
-                let name = if name.len() > (self.width - 1) {
-                    name.chars().take(self.width - 1).collect()
-                } else {
-                    name
-                };
-                out.queue(SetForegroundColor(self.fade(i)))?
-                    .queue(Print(name))?
-                    .queue(MoveToNextLine(1))?;
+                let style = Style::default().fg(self.fade(i)).bg(black);
+                buf.set_stringn(0, (i + 1) as u16, &name, self.width, style);
                 self.fader[i] = self.fader[i].saturating_sub(1);
             }
         } else {
-            let normal_bg = SetReverse(false);
-            let cursor_bg = SetReverse(true);
             for (i, song) in songs.iter().enumerate() {
-                out.queue(if i == self.selected - start {
-                    &cursor_bg
+                let style = if i == self.selected - start {
+                    Style::default().add_modifier(Modifier::REVERSED)
                 } else {
-                    &normal_bg
-                })?
-                .queue(Print(song.full_song_name()))?
-                .queue(MoveToNextLine(1))?;
+                    Style::default()
+                };
+                buf.set_stringn(0, (i + 1) as u16, song.full_song_name(), self.width, style);
             }
         }
-        out.flush()?;
+        // Pad any rows below the song list so previous content does not bleed through.
+        let drawn = songs.len();
+        let blank: String = " ".repeat(self.width);
+        for i in drawn..self.height {
+            buf.set_stringn(0, (i + 1) as u16, &blank, self.width, Style::default());
+        }
         self.scrolled = false;
         self.moved = false;
-        Ok(())
     }
 
     pub fn new(use_color: bool, width: usize, height: usize) -> Self {
@@ -340,37 +313,46 @@ impl SearchField {
 }
 
 impl SearchField {
-    pub fn draw(&self) -> Result<()> {
-        let mut out = stdout();
-
+    pub fn render(&self, buf: &mut Buffer, area: Rect) {
         let (first, cursor, last) = self.shell.command_line();
-        if self.use_color {
-            out.queue(cursor::MoveTo(self.xpos, self.ypos))?
-                .queue(Clear(ClearType::UntilNewLine))?
-                .queue(SetForegroundColor(self.prompt_color))?
-                .queue(Print("> "))?
-                .queue(SetForegroundColor(self.text_color))?
-                .queue(Print(first))?
-                .queue(SetBackgroundColor(self.cursor_color))?
-                .queue(Print(cursor))?
-                .queue(SetBackgroundColor(Color::Reset))?
-                .queue(Print(last))?;
-        } else {
-            out.queue(cursor::MoveTo(self.xpos, self.ypos))?
-                .queue(Clear(ClearType::UntilNewLine))?
-                .queue(Print("> "))?
-                .queue(Print(first))?
-                .queue(SetReverse(true))?
-                .queue(Print(cursor))?
-                .queue(SetReverse(false))?
-                .queue(Print(last))?;
-        }
+        let cursor_str = cursor.to_string();
 
-        Ok(())
+        // Clear the line up to the right edge so previous content doesn't bleed through.
+        let line_width = (area.width.saturating_sub(self.xpos)) as usize;
+        let blank: String = " ".repeat(line_width);
+        buf.set_stringn(self.xpos, self.ypos, &blank, line_width, Style::default());
+
+        let mut x = self.xpos;
+        let prompt = "> ";
+        let prompt_style = if self.use_color {
+            Style::default().fg(self.prompt_color)
+        } else {
+            Style::default()
+        };
+        buf.set_string(x, self.ypos, prompt, prompt_style);
+        x += prompt.chars().count() as u16;
+
+        let text_style = if self.use_color {
+            Style::default().fg(self.text_color)
+        } else {
+            Style::default()
+        };
+        buf.set_string(x, self.ypos, &first, text_style);
+        x += first.chars().count() as u16;
+
+        let cursor_style = if self.use_color {
+            Style::default().fg(self.text_color).bg(self.cursor_color)
+        } else {
+            Style::default().add_modifier(Modifier::REVERSED)
+        };
+        buf.set_string(x, self.ypos, &cursor_str, cursor_style);
+        x += 1;
+
+        buf.set_string(x, self.ypos, &last, text_style);
     }
 
     #[allow(clippy::unnecessary_wraps)]
-    pub fn handle_key(&mut self, key: event::KeyEvent) -> Result<KeyReturn> {
+    pub fn handle_key(&mut self, key: event::KeyEvent) -> anyhow::Result<KeyReturn> {
         let mut search = false;
         match key.code {
             KeyCode::Backspace => self.shell.del(),
@@ -440,7 +422,6 @@ impl Fft {
         let w = self.data.len() * gb;
         let h = self.height as usize;
         const BARS: [char; 9] = ['█', '▇', '▆', '▅', '▄', '▃', '▂', '▁', ' '];
-        //log!("{}", self.data[self.data.len() / 2]);
         for x in 0..self.data.len() {
             let n = (self.data[x] * (h as f32 / 25.0)) as i32;
             for y in 0..h {
@@ -467,29 +448,27 @@ impl Fft {
         });
     }
 
-    pub fn draw(&self) -> Result<()> {
+    pub fn render(&self, buf: &mut Buffer, _area: Rect) {
         if self.data.is_empty() {
-            return Ok(());
+            return;
         }
         let gb = self.bar_width + self.gap;
         let w = self.data.len() * gb;
         let h = self.height as usize;
-        let mut area: Vec<char> = vec![' '; w * h];
-        self.print_bars(&mut area);
-        let mut out = stdout();
+        let mut area_chars: Vec<char> = vec![' '; w * h];
+        self.print_bars(&mut area_chars);
         for i in 0..h {
-            out.queue(cursor::MoveTo(self.x, self.y + i as u16))?;
-            if self.use_color {
-                //let col: u8 = ((i * 255) / h);
+            let style = if self.use_color {
                 let r = (self.colors[i] >> 16) as u8;
                 let g = ((self.colors[i] >> 8) & 0xff) as u8;
-                let b = ((self.colors[i]) & 0xff) as u8;
-                out.queue(SetForegroundColor(Color::Rgb { r, g, b }))?;
-            }
+                let b = (self.colors[i] & 0xff) as u8;
+                Style::default().fg(Color::Rgb(r, g, b))
+            } else {
+                Style::default()
+            };
             let offset = i * w;
-            let line: String = area[offset..(offset + w)].iter().collect();
-            out.queue(Print(line))?;
+            let line: String = area_chars[offset..(offset + w)].iter().collect();
+            buf.set_string(self.x, self.y + i as u16, &line, style);
         }
-        Ok(())
     }
 }

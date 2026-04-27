@@ -17,7 +17,6 @@ pub mod player;
 pub mod resampler;
 pub mod rustplay;
 pub mod templ;
-pub mod term_extra;
 pub mod utils;
 pub mod value;
 
@@ -98,7 +97,7 @@ pub struct Args {
     pub write_config: bool,
 
     #[arg(long, default_value_t = false)]
-    no_term: bool,
+    pub no_term: bool,
 
     #[arg(long, short = 'c', default_value_t = false)]
     no_color: bool,

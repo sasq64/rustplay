@@ -1,11 +1,16 @@
 use anyhow::Result;
 use crossterm::event::KeyEvent;
-use crossterm::style::SetBackgroundColor;
 use gui::KeyReturn;
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
+use ratatui::buffer::Buffer;
+use ratatui::layout::Rect;
+use ratatui::prelude::Backend;
+use ratatui::style::{Color, Style};
 use scripting::Scripting;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
-use std::io::{self, Write as _, stdout};
+use std::io::{self, Stdout, stdout};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -23,11 +28,10 @@ use crate::utils::make_color;
 use crate::value::Value;
 use crate::{Args, CONFIG_LUA, log};
 use crossterm::{
-    QueueableCommand, cursor,
+    cursor,
     event::{self, Event, KeyCode},
-    style::{Color, Print, SetForegroundColor},
-    terminal,
-    terminal::{Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    execute, terminal,
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen},
 };
 
 mod gui;
@@ -35,8 +39,6 @@ mod indexer;
 mod scripting;
 mod song;
 mod state;
-
-use crate::term_extra::{MaybeCommand, SetReverse};
 
 use song::{FileInfo, FileType, SongArray, SongCollection};
 
@@ -89,10 +91,6 @@ impl RustPlay {
         let msec = Arc::new(AtomicUsize::new(0));
 
         let (media_sender, media_keys_receiver) = media_keys::start();
-
-        if !args.no_term {
-            Self::setup_term()?;
-        }
 
         let (w, h) = terminal::size()?;
 
@@ -222,56 +220,37 @@ impl RustPlay {
         self.menus.get_mut(id).expect("All menus should exist")
     }
 
-    fn setup_term() -> io::Result<()> {
+    pub fn setup_term() -> io::Result<Terminal<CrosstermBackend<Stdout>>> {
         terminal::enable_raw_mode()?;
-        stdout()
-            .queue(EnterAlternateScreen)?
-            .queue(cursor::Hide)?
-            .flush()
+        execute!(stdout(), EnterAlternateScreen, cursor::Hide)?;
+        Terminal::new(CrosstermBackend::new(stdout()))
     }
 
     pub fn restore_term() -> io::Result<()> {
-        stdout()
-            .queue(LeaveAlternateScreen)?
-            .queue(cursor::Show)?
-            .flush()?;
+        execute!(stdout(), LeaveAlternateScreen, cursor::Show)?;
         terminal::disable_raw_mode()
     }
 
-    fn bg_color(&self, color: Color) -> MaybeCommand<SetBackgroundColor> {
+    fn style_fg(&self, color: Color) -> Style {
         if self.state.use_color {
-            MaybeCommand::Set(SetBackgroundColor(color))
+            Style::default().fg(color)
         } else {
-            MaybeCommand::None
+            Style::default()
         }
     }
 
-    fn fg_color(&self, color: Color) -> MaybeCommand<SetForegroundColor> {
-        if self.state.use_color {
-            MaybeCommand::Set(SetForegroundColor(color))
-        } else {
-            MaybeCommand::None
-        }
-    }
-
-    fn write_field(&self, key: &str, val: impl Display) -> Result<()> {
+    fn write_field_into(&self, buf: &mut Buffer, key: &str, val: impl Display, style: Style) {
         if let Some(ph) = self.templ.get_placeholder(key) {
             let text = format!("{val}");
-            let l = usize::min(text.len(), ph.len);
-            stdout()
-                .queue(cursor::MoveTo(ph.col as u16, ph.line as u16))?
-                .queue(Print(&text[..l]))?;
+            buf.set_stringn(ph.col as u16, ph.line as u16, &text, ph.len, style);
         }
-        Ok(())
     }
 
     /// Draw the info panel with all song metadata
-    fn draw_info(&mut self) -> Result<()> {
-        let mut out = stdout();
-        out.queue(Clear(ClearType::All))?
-            .queue(self.fg_color(Color::Cyan))?;
+    fn draw_info_into(&mut self, buf: &mut Buffer) -> Result<()> {
+        let cyan_style = self.style_fg(Color::Cyan);
         for (i, line) in self.templ.lines().iter().enumerate() {
-            out.queue(cursor::MoveTo(0, i as u16))?.queue(Print(line))?;
+            buf.set_string(0, i as u16, line, cyan_style);
         }
 
         let overrides = self
@@ -281,8 +260,6 @@ impl RustPlay {
             .get_overrides(&self.state.meta)?;
 
         // TODO: Consider Rc<RefCell> to avoid full map clones below
-
-        //let rhai_map = RustPlay::to_rhai_map(&self.state.meta);
         for (name, ph) in self.templ.place_holders() {
             let mut color: u32 = ph.color;
             let mut val: Option<Value> = None;
@@ -302,19 +279,111 @@ impl RustPlay {
             }
             if let Some(v) = val {
                 let text = format!("{v}");
-                let l = usize::min(text.len(), ph.len);
-                if self.state.use_color {
-                    stdout().queue(SetForegroundColor(make_color(color)))?;
-                }
-                stdout()
-                    .queue(cursor::MoveTo(ph.col as u16, ph.line as u16))?
-                    .queue(Print(&text[..l]))?;
+                let style = self.style_fg(make_color(color));
+                buf.set_stringn(ph.col as u16, ph.line as u16, &text, ph.len, style);
             }
         }
         Ok(())
     }
 
-    pub fn draw_screen(&mut self) -> Result<()> {
+    /// Render the entire frame into the buffer.
+    fn render(&mut self, buf: &mut Buffer, area: Rect) -> Result<()> {
+        // Pop delayed FFT frames whose display time has arrived
+        let now = Instant::now();
+        while let Some((display_at, _)) = self.fft_queue.front() {
+            if *display_at <= now {
+                let (_, data) = self.fft_queue.pop_front().unwrap();
+                self.fft_component.update(&data);
+            } else {
+                break;
+            }
+        }
+
+        if self.state.changed {
+            self.state.changed = false;
+            self.current_menu().refresh();
+        }
+
+        if self.state.mode == InputMode::ResultScreen {
+            self.current_menu().render(buf, area);
+            return Ok(());
+        }
+
+        self.draw_info_into(buf)?;
+
+        if self.state.mode == InputMode::SearchInput {
+            self.search_component.render(buf, area);
+        } else {
+            let scripting = self.scripting.as_ref().expect("scripting should exist");
+            let info: String = scripting.info.clone().unwrap_or_else(|| {
+                "[s] = search, [f] = favorites, [a] = add favorite, [n] = next".to_string()
+            });
+            buf.set_string(
+                self.search_component.xpos,
+                self.search_component.ypos,
+                &info,
+                self.style_fg(Color::Gray),
+            );
+        }
+
+        if self.indexer.working()
+            && let Some((x, y)) = self.templ.get_pos("count")
+        {
+            buf.set_string(
+                x,
+                y,
+                format!("{}", self.indexer.index_count()),
+                Style::default(),
+            );
+        }
+
+        let play_time = self.msec.load(Ordering::SeqCst);
+        self.write_field_into(
+            buf,
+            "time",
+            format!(
+                "{:02}:{:02}:{:02}",
+                play_time / 60000,
+                (play_time / 1000) % 60,
+                (play_time / 10) % 100,
+            ),
+            Style::default(),
+        );
+
+        self.fft_component.render(buf, area);
+
+        if self.state.show_error > 0 {
+            self.state.show_error -= 1;
+            if let Some(err) = self.state.messages.front() {
+                let (text, color) = match err {
+                    Msg::Err(t) => (t.clone(), Color::Red),
+                    Msg::Info(t) => (t.clone(), Color::Yellow),
+                };
+                let x = self.state.width - text.len() as i32 - 2;
+                let y = self.state.height - 1;
+                buf.set_string(x as u16, y as u16, &text, self.style_fg(color));
+                if self.state.show_error == 0 {
+                    self.state.messages.pop_front();
+                    self.state.changed = true;
+                }
+            }
+        } else if !self.state.messages.is_empty() {
+            let l = self.state.messages.len();
+            self.state.show_error = match l {
+                5.. => 1,
+                2..5 => 10,
+                _ => 50,
+            };
+            log!("Error for {} frames", self.state.show_error);
+        }
+
+        Ok(())
+    }
+
+    pub fn draw_screen<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B: Backend,
+    {
         let play_time = self.msec.load(Ordering::SeqCst);
         if !self.state.player_started && !self.current_playlist.is_empty() {
             let song = self.current_playlist.get(0);
@@ -327,105 +396,19 @@ impl RustPlay {
             self.next_song();
         }
 
-        if self.no_term {
-            return Ok(());
+        let mut render_err: Option<anyhow::Error> = None;
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                let buf = frame.buffer_mut();
+                if let Err(e) = self.render(buf, area) {
+                    render_err = Some(e);
+                }
+            })
+            .unwrap();
+        if let Some(e) = render_err {
+            return Err(e);
         }
-
-        let black_bg = self.bg_color(Color::Rgb { r: 0, g: 0, b: 0 });
-        let normal_bg = SetReverse(false);
-
-        let mut out = stdout();
-
-        out.queue(normal_bg)?.queue(&black_bg)?.flush()?;
-        if self.state.changed {
-            self.state.changed = false;
-            self.current_menu().refresh();
-            self.draw_info()?;
-        }
-
-        if self.state.mode == InputMode::ResultScreen {
-            self.current_menu().draw()?;
-            return Ok(());
-        }
-
-        if self.state.mode == InputMode::SearchInput {
-            self.search_component.draw()?;
-        } else {
-            let scripting = self.scripting.as_ref().expect("scripting should exist");
-
-            let info: String = scripting.info.clone().unwrap_or(
-                "[s] = search, [f] = favorites, [a] = add favorite, [n] = next".to_string(),
-            );
-            out.queue(cursor::MoveTo(
-                self.search_component.xpos,
-                self.search_component.ypos,
-            ))?
-            .queue(self.fg_color(Color::Grey))?
-            .queue(Print(info))?;
-        }
-        out.queue(&black_bg)?;
-
-        if self.indexer.working()
-            && let Some((x, y)) = self.templ.get_pos("count")
-        {
-            out.queue(cursor::MoveTo(x, y))?
-                .queue(Print(format!("{}", self.indexer.index_count())))?
-                .flush()?;
-        }
-
-        let play_time = self.msec.load(Ordering::SeqCst);
-        self.write_field(
-            "time",
-            format!(
-                "{:02}:{:02}:{:02}",
-                play_time / 60000,
-                (play_time / 1000) % 60,
-                (play_time / 10) % 100,
-            ),
-        )?;
-
-        // Pop delayed FFT frames whose display time has arrived
-        let now = Instant::now();
-        while let Some((display_at, _)) = self.fft_queue.front() {
-            if *display_at <= now {
-                let (_, data) = self.fft_queue.pop_front().unwrap();
-                self.fft_component.update(&data);
-            } else {
-                break;
-            }
-        }
-        self.fft_component.draw()?;
-
-        if self.state.show_error > 0 {
-            self.state.show_error -= 1;
-            let Some(err) = self.state.messages.front() else {
-                return Ok(());
-            };
-            let (text, color) = match err {
-                Msg::Err(t) => (t, Color::Red),
-                Msg::Info(t) => (t, Color::Yellow),
-            };
-            let x = self.state.width - text.len() as i32 - 2;
-            let y = self.state.height - 1;
-
-            out.queue(cursor::MoveTo(x as u16, y as u16))?
-                .queue(self.fg_color(color))?
-                .queue(Print(text))?;
-            if self.state.show_error == 0 {
-                self.state.messages.pop_front();
-                self.state.changed = true;
-            }
-        } else if !self.state.messages.is_empty() {
-            let l = self.state.messages.len();
-            self.state.show_error = match l {
-                5.. => 1,
-                2..5 => 10,
-                _ => 50,
-            };
-            log!("Error for {} frames", self.state.show_error);
-        }
-
-        out.flush()?;
         Ok(())
     }
 
@@ -700,10 +683,8 @@ impl RustPlay {
             Event::Resize(width, height) => {
                 self.handle_resize(width, height);
             }
-            Event::Key(key) => {
-                if key.kind == event::KeyEventKind::Press {
-                    self.handle_key(key)?;
-                }
+            Event::Key(key) if key.kind == event::KeyEventKind::Press => {
+                self.handle_key(key)?;
             }
             _ => {}
         }
@@ -921,9 +902,6 @@ impl RustPlay {
     ///
     /// Will panic if the player thread could not be joined.
     pub fn destroy(&mut self) -> Result<()> {
-        if !self.no_term {
-            RustPlay::restore_term()?;
-        }
         // Send quit command; if it fails, the thread already exited (possibly with an error)
         let _ = self.cmd_producer.send(Box::new(Player::quit));
 

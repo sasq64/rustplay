@@ -1,5 +1,5 @@
 use anyhow::Result;
-use crossterm::style::Color;
+use ratatui::style::Color;
 use std::io::Cursor;
 use std::path::Path;
 use std::{fs, io};
@@ -32,5 +32,5 @@ pub fn make_color(color: u32) -> Color {
     let r = (color >> 16) as u8;
     let g = ((color >> 8) & 0xff) as u8;
     let b = (color & 0xff) as u8;
-    Color::Rgb { r, g, b }
+    Color::Rgb(r, g, b)
 }

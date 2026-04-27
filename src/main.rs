@@ -36,6 +36,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn run_rustplay(args: Args) -> Result<()> {
+    let no_term = args.no_term;
+    let mut terminal = if !no_term {
+        Some(RustPlay::setup_term()?)
+    } else {
+        None
+    };
     let mut rust_play = RustPlay::new(args)?;
     loop {
         let do_quit = rust_play.handle_events()?;
@@ -43,11 +49,17 @@ fn run_rustplay(args: Args) -> Result<()> {
             break;
         }
         rust_play.update()?;
-        rust_play.draw_screen()?;
+        if let Some(t) = terminal.as_mut() {
+            rust_play.draw_screen(t)?;
+        }
         std::thread::sleep(Duration::from_millis(5));
     }
 
     rust_play.destroy()?;
+    drop(terminal);
+    if !no_term {
+        RustPlay::restore_term()?;
+    }
 
     Ok(())
 }
