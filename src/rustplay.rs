@@ -4,7 +4,7 @@ use gui::KeyReturn;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::prelude::Backend;
 use ratatui::style::{Color, Style};
 use scripting::Scripting;
@@ -304,6 +304,13 @@ impl RustPlay {
             self.current_menu().refresh();
         }
 
+        let [ui_rect, search_line, fft_rect] = Layout::vertical([
+            Constraint::Min(1),
+            Constraint::Length(1),
+            Constraint::Length(6),
+        ])
+        .areas(area);
+
         if self.state.mode == InputMode::ResultScreen {
             self.current_menu().render(buf, area);
             return Ok(());
@@ -350,7 +357,7 @@ impl RustPlay {
             Style::default(),
         );
 
-        self.fft_component.render(buf, area);
+        self.fft_component.render(buf, fft_rect);
 
         if self.state.show_error > 0 {
             self.state.show_error -= 1;
@@ -380,10 +387,12 @@ impl RustPlay {
         Ok(())
     }
 
-    pub fn draw_screen<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
-    where
-        B: Backend,
-    {
+    pub fn update(&mut self) -> Result<()> {
+        if self.state.done {
+            self.next_song();
+            self.state.done = false;
+        }
+        self.update_meta()?;
         let play_time = self.msec.load(Ordering::SeqCst);
         if !self.state.player_started && !self.current_playlist.is_empty() {
             let song = self.current_playlist.get(0);
@@ -391,11 +400,16 @@ impl RustPlay {
             self.play_song(&song);
             self.state.player_started = true;
         }
-        // TODO: Separate update() function for things like this
         if self.state.len_msec > 0 && play_time > self.state.len_msec {
             self.next_song();
         }
+        Ok(())
+    }
 
+    pub fn draw_screen<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
+    where
+        B: Backend,
+    {
         let mut render_err: Option<anyhow::Error> = None;
         terminal
             .draw(|frame| {
@@ -598,11 +612,7 @@ impl RustPlay {
         Ok(false)
     }
 
-    pub fn update(&mut self) -> Result<()> {
-        if self.state.done {
-            self.next_song();
-            self.state.done = false;
-        }
+    fn update_meta(&mut self) -> Result<()> {
         let mut next_fft_at = None;
         while let Ok((meta, val)) = self.info_consumer.try_recv() {
             if meta != "fft" && meta != "fft_at" {

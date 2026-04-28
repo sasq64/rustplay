@@ -448,7 +448,7 @@ impl Fft {
         });
     }
 
-    pub fn render(&self, buf: &mut Buffer, _area: Rect) {
+    pub fn render(&self, buf: &mut Buffer, area: Rect) {
         if self.data.is_empty() {
             return;
         }
@@ -468,7 +468,7 @@ impl Fft {
             };
             let offset = i * w;
             let line: String = area_chars[offset..(offset + w)].iter().collect();
-            buf.set_string(self.x, self.y + i as u16, &line, style);
+            buf.set_string(area.x, area.y + i as u16, &line, style);
         }
     }
 }
