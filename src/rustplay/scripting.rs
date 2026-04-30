@@ -385,6 +385,35 @@ function enter_or_play_selected() rust_play:enter_or_play_selected() end
         }
         Ok(result)
     }
+
+    pub fn override_meta(&self, meta: &HashMap<String, Value>) -> Result<HashMap<String, Value>> {
+        let mut result = HashMap::new();
+
+        let lua_meta = self.lua.create_table()?;
+        for (k, v) in meta {
+            match v {
+                Value::Text(s) => lua_meta.set(k.as_str(), s.as_str())?,
+                Value::Number(n) => lua_meta.set(k.as_str(), *n)?,
+                _ => lua_meta.set(k.as_str(), "")?,
+            }
+            result.insert(k.clone(), v.clone());
+        }
+
+        for (name, tvar) in &self.variables {
+            let value = match &tvar.func {
+                Some(key) => {
+                    let func: LuaFunction = self.lua.registry_value(key)?;
+                    let s: String = func.call(lua_meta.clone())?;
+                    Value::Text(s)
+                }
+                None => Value::Unknown,
+            };
+            if value != Value::Unknown {
+                result.insert(name.clone(), value);
+            }
+        }
+        Ok(result)
+    }
 }
 
 #[cfg(test)]
