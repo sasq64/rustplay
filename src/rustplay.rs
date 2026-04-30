@@ -4,9 +4,11 @@ use gui::KeyReturn;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
-use ratatui::layout::{Constraint, Layout, Rect};
+use ratatui::layout::{Alignment, Constraint, Layout, Rect, Spacing};
 use ratatui::prelude::Backend;
 use ratatui::style::{Color, Style};
+use ratatui::symbols::merge::MergeStrategy;
+use ratatui::widgets::{Block, BorderType, Paragraph, Widget};
 use scripting::Scripting;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt::Display;
@@ -50,6 +52,40 @@ enum MenuId {
     Search,
     Favorites,
     Dir,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct UIRect {
+    pub rect: Rect,
+    pub style: Style,
+    pub id: String,
+    pub block: bool,
+}
+
+impl UIRect {
+    pub fn new(id: impl Into<String>, rect: Rect) -> Self {
+        UIRect {
+            rect,
+            id: id.into(),
+            style: Style::default(),
+            block: true,
+        }
+    }
+
+    pub const fn fg(&mut self, color: Color) -> &mut Self {
+        self.style = self.style.fg(color);
+        self
+    }
+
+    pub const fn bg(&mut self, color: Color) -> &mut Self {
+        self.style = self.style.bg(color);
+        self
+    }
+
+    pub const fn block(&mut self) -> &mut Self {
+        self.block = true;
+        self
+    }
 }
 
 /// The RustPlay application
@@ -259,7 +295,6 @@ impl RustPlay {
             .expect("scripting should exist")
             .get_overrides(&self.state.meta)?;
 
-        // TODO: Consider Rc<RefCell> to avoid full map clones below
         for (name, ph) in self.templ.place_holders() {
             let mut color: u32 = ph.color;
             let mut val: Option<Value> = None;
@@ -286,6 +321,125 @@ impl RustPlay {
         Ok(())
     }
 
+    fn render_ui(&mut self, buf: &mut Buffer, area: Rect) -> Result<()> {
+        let meta = self
+            .scripting
+            .as_mut()
+            .expect("scripting should exist")
+            .override_meta(&self.state.meta)?;
+
+        let block = Block::bordered()
+            .border_type(BorderType::Rounded)
+            .border_style(Style::default().blue())
+            .merge_borders(MergeStrategy::Fuzzy);
+
+        let style = Style::default();
+        let label_style = style.bold();
+        let subtitle_style = style.light_yellow();
+
+        let [ui_rect, search_line, fft_rect] = Layout::vertical([
+            Constraint::Length(7),
+            Constraint::Length(1),
+            Constraint::Min(6),
+        ])
+        .areas(area);
+
+        let [mut info1, info2, info3] = Layout::vertical([
+            Constraint::Length(4),
+            Constraint::Length(3),
+            Constraint::Length(3),
+        ])
+        .spacing(Spacing::Overlap(1))
+        .areas(ui_rect);
+
+        const SONG: &str = "SONG";
+        const FORMAT: &str = "FORMAT";
+        let [mut len_rect, song_text, song_rect, format_text, format_rect] = Layout::horizontal([
+            Constraint::Length(20),
+            Constraint::Length(SONG.len() as u16 + 4),
+            Constraint::Min(8),
+            Constraint::Length(FORMAT.len() as u16 + 4),
+            Constraint::Min(20),
+        ])
+        .spacing(Spacing::Overlap(1))
+        .areas(info2);
+
+        if let Some(title) = meta.get("title_and_composer") {
+            Paragraph::new(title.to_string())
+                .block(block.clone())
+                .render(info1, buf);
+        }
+        if let Some(sub_title) = meta.get("sub_title") {
+            info1.y += 2;
+            info1.x += 1;
+            info1.width -= 2;
+            info1.height = 1;
+            Paragraph::new(sub_title.to_string())
+                .style(subtitle_style)
+                .render(info1, buf);
+        }
+
+        let play_time = self.msec.load(Ordering::SeqCst);
+        let ls = format!(
+            " {:02}:{:02}:{:02}",
+            play_time / 60000,
+            (play_time / 1000) % 60,
+            (play_time / 10) % 100,
+        );
+        Paragraph::new(ls)
+            .block(block.clone())
+            .render(len_rect, buf);
+
+        if let Some(isong) = meta.get("isong") {
+            let ss = format!("{:02}", isong);
+            Paragraph::new(ss)
+                .block(block.clone())
+                .render(song_rect, buf);
+        }
+
+        Paragraph::new(SONG)
+            .block(block.clone())
+            .alignment(Alignment::Center)
+            .style(label_style)
+            .render(song_text, buf);
+
+        Paragraph::new(FORMAT)
+            .block(block.clone())
+            .alignment(Alignment::Center)
+            .style(label_style)
+            .render(format_text, buf);
+
+        if let Some(fmt) = meta.get("format") {
+            Paragraph::new(fmt.to_string())
+                .block(block.clone())
+                .render(format_rect, buf);
+        }
+        if let Some(len) = meta.get("len") {
+            if len_rect.width >= 12 {
+                len_rect.x += 10;
+                len_rect.y += 1;
+                len_rect.height -= 2;
+                len_rect.width -= 10;
+            }
+            Paragraph::new(format!(" / {len}")).render(len_rect, buf);
+        }
+
+        Paragraph::new("NEXT:")
+            .block(block.clone())
+            .render(info3, buf);
+
+        if self.state.mode == InputMode::SearchInput {
+            self.search_component.render(buf, search_line);
+        } else {
+            Paragraph::new(
+                "[s] = search, [f] = favorites, [a] = add favorite, [n] = next".to_string(),
+            )
+            .render(search_line, buf);
+        }
+        self.fft_component.render(buf, fft_rect);
+        Ok(())
+    }
+
     /// Render the entire frame into the buffer.
     fn render(&mut self, buf: &mut Buffer, area: Rect) -> Result<()> {
         // Pop delayed FFT frames whose display time has arrived
@@ -304,34 +458,11 @@ impl RustPlay {
             self.current_menu().refresh();
         }
 
-        let [ui_rect, search_line, fft_rect] = Layout::vertical([
-            Constraint::Min(1),
-            Constraint::Length(1),
-            Constraint::Length(6),
-        ])
-        .areas(area);
-
         if self.state.mode == InputMode::ResultScreen {
             self.current_menu().render(buf, area);
             return Ok(());
         }
-
-        self.draw_info_into(buf)?;
-
-        if self.state.mode == InputMode::SearchInput {
-            self.search_component.render(buf, area);
-        } else {
-            let scripting = self.scripting.as_ref().expect("scripting should exist");
-            let info: String = scripting.info.clone().unwrap_or_else(|| {
-                "[s] = search, [f] = favorites, [a] = add favorite, [n] = next".to_string()
-            });
-            buf.set_string(
-                self.search_component.xpos,
-                self.search_component.ypos,
-                &info,
-                self.style_fg(Color::Gray),
-            );
-        }
+        self.render_ui(buf, area)?;
 
         if self.indexer.working()
             && let Some((x, y)) = self.templ.get_pos("count")
@@ -344,21 +475,10 @@ impl RustPlay {
             );
         }
 
-        let play_time = self.msec.load(Ordering::SeqCst);
-        self.write_field_into(
-            buf,
-            "time",
-            format!(
-                "{:02}:{:02}:{:02}",
-                play_time / 60000,
-                (play_time / 1000) % 60,
-                (play_time / 10) % 100,
-            ),
-            Style::default(),
-        );
+        Ok(())
+    }
 
-        self.fft_component.render(buf, fft_rect);
-
+    fn show_errors(&mut self, buf: &mut Buffer, _area: Rect) {
         if self.state.show_error > 0 {
             self.state.show_error -= 1;
             if let Some(err) = self.state.messages.front() {
@@ -383,15 +503,9 @@ impl RustPlay {
             };
             log!("Error for {} frames", self.state.show_error);
         }
-
-        Ok(())
     }
 
     pub fn update(&mut self) -> Result<()> {
-        if self.state.done {
-            self.next_song();
-            self.state.done = false;
-        }
         self.update_meta()?;
         let play_time = self.msec.load(Ordering::SeqCst);
         if !self.state.player_started && !self.current_playlist.is_empty() {
@@ -400,8 +514,9 @@ impl RustPlay {
             self.play_song(&song);
             self.state.player_started = true;
         }
-        if self.state.len_msec > 0 && play_time > self.state.len_msec {
+        if self.state.done || (self.state.len_msec > 0 && play_time > self.state.len_msec) {
             self.next_song();
+            self.state.done = false;
         }
         Ok(())
     }
@@ -409,20 +524,13 @@ impl RustPlay {
     pub fn draw_screen<B>(&mut self, terminal: &mut Terminal<B>) -> Result<()>
     where
         B: Backend,
+        B::Error: Send + Sync + From<io::Error> + 'static,
     {
-        let mut render_err: Option<anyhow::Error> = None;
-        terminal
-            .draw(|frame| {
-                let area = frame.area();
-                let buf = frame.buffer_mut();
-                if let Err(e) = self.render(buf, area) {
-                    render_err = Some(e);
-                }
-            })
-            .unwrap();
-        if let Some(e) = render_err {
-            return Err(e);
-        }
+        terminal.try_draw(|frame| {
+            let area = frame.area();
+            let buf = frame.buffer_mut();
+            self.render(buf, area).map_err(io::Error::other)
+        })?;
         Ok(())
     }
 

@@ -317,19 +317,21 @@ impl SearchField {
         let (first, cursor, last) = self.shell.command_line();
         let cursor_str = cursor.to_string();
 
-        // Clear the line up to the right edge so previous content doesn't bleed through.
-        let line_width = (area.width.saturating_sub(self.xpos)) as usize;
-        let blank: String = " ".repeat(line_width);
-        buf.set_stringn(self.xpos, self.ypos, &blank, line_width, Style::default());
+        let (xpos, ypos) = (area.x, area.y);
 
-        let mut x = self.xpos;
+        // Clear the line up to the right edge so previous content doesn't bleed through.
+        let line_width = (area.width.saturating_sub(xpos)) as usize;
+        let blank: String = " ".repeat(line_width);
+        buf.set_stringn(xpos, ypos, &blank, line_width, Style::default());
+
+        let mut x = xpos;
         let prompt = "> ";
         let prompt_style = if self.use_color {
             Style::default().fg(self.prompt_color)
         } else {
             Style::default()
         };
-        buf.set_string(x, self.ypos, prompt, prompt_style);
+        buf.set_string(x, ypos, prompt, prompt_style);
         x += prompt.chars().count() as u16;
 
         let text_style = if self.use_color {
@@ -337,7 +339,7 @@ impl SearchField {
         } else {
             Style::default()
         };
-        buf.set_string(x, self.ypos, &first, text_style);
+        buf.set_string(x, ypos, &first, text_style);
         x += first.chars().count() as u16;
 
         let cursor_style = if self.use_color {
@@ -345,10 +347,10 @@ impl SearchField {
         } else {
             Style::default().add_modifier(Modifier::REVERSED)
         };
-        buf.set_string(x, self.ypos, &cursor_str, cursor_style);
+        buf.set_string(x, ypos, &cursor_str, cursor_style);
         x += 1;
 
-        buf.set_string(x, self.ypos, &last, text_style);
+        buf.set_string(x, ypos, &last, text_style);
     }
 
     #[allow(clippy::unnecessary_wraps)]
