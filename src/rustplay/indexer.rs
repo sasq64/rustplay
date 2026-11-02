@@ -563,6 +563,22 @@ impl RemoteSongIndexer {
         #[allow(clippy::unwrap_used)]
         let lock = || indexer.lock().unwrap();
 
+        // Identify and index a single file, returning its info if it was a song
+        let index_file = |file_entry: &walkdir::DirEntry| -> Result<Option<FileInfo>> {
+            if let Some(ext) = file_entry.path().extension() {
+                let ext = ext.to_string_lossy().to_lowercase();
+                if non_songs.contains(ext.as_str()) {
+                    return Ok(None);
+                }
+            }
+            if file_entry.file_type().is_file() && musix::can_handle(file_entry.path())? {
+                let file_info = SongIndexer::identify_song(file_entry.path());
+                lock().add_song(&file_info)?;
+                return Ok(Some(file_info));
+            }
+            Ok(None)
+        };
+
         let mut ignore_cache: bool = false;
 
         loop {
@@ -600,18 +616,7 @@ impl RemoteSongIndexer {
                                 // Cache miss: identify songs and save cache
                                 let mut cache_entries = Vec::new();
                                 for file_entry in pending_files.drain(..) {
-                                    if let Some(ext) = file_entry.path().extension() {
-                                        let ext = ext.to_string_lossy().to_lowercase();
-                                        if non_songs.contains(ext.as_str()) {
-                                            continue;
-                                        }
-                                    }
-                                    if file_entry.file_type().is_file()
-                                        && musix::can_handle(file_entry.path())?
-                                    {
-                                        let file_info =
-                                            SongIndexer::identify_song(file_entry.path());
-                                        lock().add_song(&file_info)?;
+                                    if let Some(file_info) = index_file(&file_entry)? {
                                         cache_entries
                                             .push(CachedFileInfo::from_file_info(&file_info));
                                     }
@@ -637,6 +642,11 @@ impl RemoteSongIndexer {
                             lock().commit()?;
                             now += Duration::from_millis(1000);
                         }
+                    }
+                    // Files with no parent directory entry in the walk (i.e. a
+                    // single file was added) are never flushed above.
+                    for file_entry in pending_files.drain(..) {
+                        index_file(&file_entry)?;
                     }
                     lock().commit()?;
                     working.store(false, Ordering::Relaxed);
@@ -762,6 +772,18 @@ mod tests {
         assert!(result.len() >= 3);
         let result = indexer.search("xywizoqp").unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn remote_single_file_works() {
+        init_music();
+        let indexer = RemoteSongIndexer::new().unwrap();
+        indexer.ignore_cache(true).unwrap();
+        indexer.add_path(Path::new("music.mod")).unwrap();
+        while indexer.working() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(indexer.get_all_songs().len(), 1);
     }
 
     #[test]
