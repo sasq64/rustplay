@@ -136,7 +136,8 @@ impl RustPlay {
                 if song.is_file() {
                     start_dir = song.parent().unwrap_or(Path::new("")).into();
                 } else {
-                    start_dir = song.into();
+                    // Normalize (e.g. strip trailing '/') so it matches indexed parent paths
+                    start_dir = song.components().collect();
                 }
                 indexer.add_path(song)?;
             }
@@ -564,7 +565,9 @@ impl RustPlay {
 
     fn enter_or_play_selected(&mut self) -> Result<()> {
         let menu = self.current_menu();
-        let song = menu.get_current();
+        let Some(song) = menu.get_current() else {
+            return Ok(());
+        };
         if song.file_type == FileType::Dir {
             self.current_dir = song.path;
             self.show_directory()?;
@@ -818,11 +821,13 @@ impl RustPlay {
 
     fn get_selected_song(&self) -> Option<FileInfo> {
         let menu = self.menus.get(&self.current_menu).unwrap();
-        Some(menu.get_current())
+        menu.get_current()
     }
 
     fn add_selected_to_favorites(&mut self) {
-        let song = self.current_menu().get_current();
+        let Some(song) = self.current_menu().get_current() else {
+            return;
+        };
         if song.file_type == FileType::Dir {
             return;
         }

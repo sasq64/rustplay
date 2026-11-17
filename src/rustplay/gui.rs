@@ -195,8 +195,11 @@ impl SongMenu {
         self.scrolled = true;
     }
 
-    pub fn get_current(&self) -> FileInfo {
-        self.songs.get(self.selected).clone()
+    pub fn get_current(&self) -> Option<FileInfo> {
+        if self.selected >= self.songs.len() {
+            return None;
+        }
+        Some(self.songs.get(self.selected))
     }
 
     #[allow(clippy::unnecessary_wraps)]
